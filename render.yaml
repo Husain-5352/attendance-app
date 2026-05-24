@@ -1,9 +1,0 @@
-services:
-  - type: web
-    name: attendance-app
-    env: static
-    buildCommand: npm install && npm run build
-    staticPublishPath: ./dist
-    envVars:
-      - key: NODE_VERSION
-        value: 18.20.4
