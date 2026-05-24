@@ -1,708 +1,853 @@
+import { useState, useEffect, useRef } from "react";
+import * as XLSX from "xlsx";
 
-import { useState, useRef, useEffect } from "react";
+// ─── Storage helpers (localStorage as persistent backend) ────────────────────
+const DB_KEY = "hajj_attendance_db";
 
-/* ─── persistent storage helpers (use window.storage from artifact env) ─── */
-const DB = {
-  async get(key) {
-    try {
-      const r = await window.storage.get(key, true);
-      return r ? JSON.parse(r.value) : null;
-    } catch { return null; }
-  },
-  async set(key, val) {
-    try { await window.storage.set(key, JSON.stringify(val), true); } catch {}
-  }
-};
-
-const HUSAIN_MEMBERS = [
-  { id:1,  name:"M.Husain Dewaswala",        gender:"male"   },
-  { id:2,  name:"M.Husain Hakimji",           gender:"male"   },
-  { id:3,  name:"M.Murtaza Raswala",          gender:"male"   },
-  { id:4,  name:"Akberali Kota wala",         gender:"male"   },
-  { id:5,  name:"Firoz lokhandwala",          gender:"male"   },
-  { id:6,  name:"Akber Ali Dewaswala",        gender:"male"   },
-  { id:7,  name:"M.Ammar Kanchwala",          gender:"male"   },
-  { id:8,  name:"Shabbir Husain Lokhandwala", gender:"male"   },
-  { id:9,  name:"Shabbir Husain bigodwala",   gender:"male"   },
-  { id:10, name:"Baqir bh chalni wala",       gender:"male"   },
-  { id:11, name:"Khozema bh Peti wala",       gender:"male"   },
-  { id:12, name:"Qaidjohar bh dhamangaon",    gender:"male"   },
-  { id:13, name:"Zulfiqar bh Kapasi",         gender:"male"   },
-  { id:14, name:"Shabbir Husain thekedar",    gender:"male"   },
-  { id:15, name:"Shk. Mustafa burhani",       gender:"male"   },
-  { id:16, name:"Abidali runderwala",         gender:"male"   },
-  { id:17, name:"Imran bh Dhamman",           gender:"male"   },
-  { id:18, name:"Shoeb bh Samrat",            gender:"male"   },
-  { id:19, name:"Husain Malak",               gender:"male"   },
-  { id:20, name:"Taher shakru",               gender:"male"   },
-  { id:21, name:"Hasanji Nala wala",          gender:"male"   },
-  { id:22, name:"Shabbir chaati",             gender:"male"   },
-  { id:23, name:"Shabbir vadgaam",            gender:"male"   },
-  { id:24, name:"Taher nala",                 gender:"male"   },
-  { id:25, name:"Husaina bn hakimji",         gender:"female" },
-  { id:26, name:"Arwa bn raswala",            gender:"female" },
-  { id:27, name:"Tasneem bn dewaswala",       gender:"female" },
-  { id:28, name:"Fatema bn kanchwala",        gender:"female" },
-  { id:29, name:"Fatema bn lokhandwala",      gender:"female" },
-  { id:30, name:"Tasneem bn lokhandwala",     gender:"female" },
-  { id:31, name:"Sakina bn kotawala",         gender:"female" },
-  { id:32, name:"Zahabiyah bn bigodwala",     gender:"female" },
-  { id:33, name:"Fatema bn chalni",           gender:"female" },
-  { id:34, name:"Khadija bn petiwala",        gender:"female" },
-  { id:35, name:"Shakera bn dhamangaon",      gender:"female" },
-  { id:36, name:"Khadija bn runderawala",     gender:"female" },
-  { id:37, name:"Mariya bn thekedar",         gender:"female" },
-  { id:38, name:"Sabera bn damman",           gender:"female" },
-  { id:39, name:"Tahera bn Samrat",           gender:"female" },
-  { id:40, name:"Farida bn kapasi",           gender:"female" },
-  { id:41, name:"Rashida bn shakruwala",      gender:"female" },
-  { id:42, name:"Sakina bn Malak",            gender:"female" },
-  { id:43, name:"Fatema bn Chati",            gender:"female" },
-  { id:44, name:"Mariya bn nala wala",        gender:"female" },
-  { id:45, name:"Mariya bn vadgam",           gender:"female" },
-  { id:46, name:"Sakina bn nalawala",         gender:"female" },
-];
-
-function hashPw(pw) {
-  let h = 0;
-  for (let i = 0; i < pw.length; i++) { h = Math.imul(31, h) + pw.charCodeAt(i) | 0; }
-  return h.toString(16);
+function loadDB() {
+  try {
+    const raw = localStorage.getItem(DB_KEY);
+    if (!raw) return initDB();
+    const db = JSON.parse(raw);
+    // deserialize Set arrays in events
+    Object.values(db.users || {}).forEach(u => {
+      (u.events || []).forEach(ev => {
+        ev.arrivedIds = new Set(ev.arrivedIds || []);
+      });
+    });
+    return db;
+  } catch { return initDB(); }
 }
 
+function initDB() {
+  const db = {
+    users: {
+      "husain_dewaswala": {
+        username: "husain_dewaswala",
+        displayName: "Husain Dewaswala",
+        password: "7865253",
+        members: [
+          {id:1,name:"M.Husain Dewaswala"},{id:2,name:"M.Husain Hakimji"},
+          {id:3,name:"M.Murtaza Raswala"},{id:4,name:"Akberali Kota wala"},
+          {id:5,name:"Firoz lokhandwala"},{id:6,name:"Akber Ali Dewaswala"},
+          {id:7,name:"M.Ammar Kanchwala"},{id:8,name:"Shabbir Husain Lokhandwala"},
+          {id:9,name:"Shabbir Husain bigodwala"},{id:10,name:"Baqir bh chalni wala"},
+          {id:11,name:"Khozema bh Peti wala"},{id:12,name:"Qaidjohar bh dhamangaon"},
+          {id:13,name:"Zulfiqar bh Kapasi"},{id:14,name:"Shabbir Husain thekedar"},
+          {id:15,name:"Shk. Mustafa burhani"},{id:16,name:"Abidali runderwala"},
+          {id:17,name:"Imran bh Dhamman"},{id:18,name:"Shoeb bh Samrat"},
+          {id:19,name:"Husain Malak"},{id:20,name:"Taher shakru"},
+          {id:21,name:"Hasanji Nala wala"},{id:22,name:"Shabbir chaati"},
+          {id:23,name:"Shabbir vadgaam"},{id:24,name:"Taher nala"},
+          {id:25,name:"Husaina bn hakimji"},{id:26,name:"Arwa bn raswala"},
+          {id:27,name:"Tasneem bn dewaswala"},{id:28,name:"Fatema bn kanchwala"},
+          {id:29,name:"Fatema bn lokhandwala"},{id:30,name:"Tasneem bn lokhandwala"},
+          {id:31,name:"Sakina bn kotawala"},{id:32,name:"Zahabiyah bn bigodwala"},
+          {id:33,name:"Fatema bn chalni"},{id:34,name:"Khadija bn petiwala"},
+          {id:35,name:"Shakera bn dhamangaon"},{id:36,name:"Khadija bn runderawala"},
+          {id:37,name:"Mariya bn thekedar"},{id:38,name:"Sabera bn damman"},
+          {id:39,name:"Tahera bn Samrat"},{id:40,name:"Farida bn kapasi"},
+          {id:41,name:"Rashida bn shakruwala"},{id:42,name:"Sakina bn Malak"},
+          {id:43,name:"Fatema bn Chati"},{id:44,name:"Mariya bn nala wala"},
+          {id:45,name:"Mariya bn vadgam"},{id:46,name:"Sakina bn nalawala"},
+        ],
+        events: []
+      }
+    }
+  };
+  saveDB(db);
+  return db;
+}
+
+function saveDB(db) {
+  try {
+    const serializable = { ...db, users: {} };
+    Object.entries(db.users).forEach(([k, u]) => {
+      serializable.users[k] = {
+        ...u,
+        events: (u.events || []).map(ev => ({
+          ...ev,
+          arrivedIds: [...(ev.arrivedIds || [])]
+        }))
+      };
+    });
+    localStorage.setItem(DB_KEY, JSON.stringify(serializable));
+  } catch(e) { console.error("Save failed", e); }
+}
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+function slugify(name) {
+  return name.toLowerCase().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
+}
 function formatDate(d) {
   if (!d) return "";
   return new Date(d).toLocaleDateString("en-IN", { day:"2-digit", month:"short", year:"numeric" });
 }
 
-/* ════════════════════════════════════════════════════════════════════════════
-   ROOT
-═══════════════════════════════════════════════════════════════════════════════*/
+// ─── Toast ────────────────────────────────────────────────────────────────────
+function useToast() {
+  const [toast, setToast] = useState(null);
+  function show(msg, type="success") {
+    setToast({ msg, type });
+    setTimeout(() => setToast(null), 2500);
+  }
+  return [toast, show];
+}
+
+// ─── Icons ────────────────────────────────────────────────────────────────────
+const Icon = {
+  mosque: "🕌", star: "✦", crescent: "☽", user: "👤", lock: "🔒",
+  plus: "+", check: "✓", back: "←", eye: "👁", upload: "📤",
+  event: "📋", logout: "⎋", kaaba: "🕋", pray: "🤲", group: "👥",
+  calendar: "📅", delete: "✕", excel: "📊", search: "🔍"
+};
+
+// ─── Styles ───────────────────────────────────────────────────────────────────
+const C = {
+  gold: "#B8860B",
+  goldLight: "#D4AF37",
+  goldPale: "#F5E6B3",
+  green: "#2D6A4F",
+  greenLight: "#52B788",
+  cream: "#FDF6E3",
+  sand: "#E8D5A3",
+  brown: "#6B3A2A",
+  brownLight: "#8B5E3C",
+  red: "#C0392B",
+  white: "#FFFFFF",
+  text: "#2C1810",
+  textLight: "#6B4C3B",
+  border: "#D4B896",
+  bg: "#F5EDD6",
+  cardBg: "#FFFDF5",
+};
+
+const shadows = {
+  sm: "0 2px 8px rgba(107,58,42,0.1)",
+  md: "0 4px 16px rgba(107,58,42,0.15)",
+  lg: "0 8px 32px rgba(107,58,42,0.2)",
+};
+
+// ─── Main App ─────────────────────────────────────────────────────────────────
 export default function App() {
-  const [user, setUser] = useState(null);   // logged-in user object
-  const [authScreen, setAuthScreen] = useState("login"); // login | register
-
-  async function handleLogin(username, password) {
-    const users = await DB.get("users") || {};
-    const key = username.trim().toLowerCase();
-    if (!users[key]) return "No account found. Please register.";
-    if (users[key].pwHash !== hashPw(password)) return "Wrong password.";
-    setUser({ username: key, displayName: users[key].displayName });
-    return null;
-  }
-
-  async function handleRegister(displayName, username, password) {
-    const users = await DB.get("users") || {};
-    const key = username.trim().toLowerCase();
-    if (users[key]) return "Username already taken.";
-    users[key] = { displayName: displayName.trim(), pwHash: hashPw(password), members: [], events: [] };
-    // seed Husain's account if not exists
-    const husainKey = "husain dewaswala";
-    if (!users[husainKey]) {
-      users[husainKey] = { displayName:"Husain Dewaswala", pwHash: hashPw("7865253"), members: HUSAIN_MEMBERS, events: [] };
-    }
-    await DB.set("users", users);
-    setUser({ username: key, displayName: displayName.trim() });
-    return null;
-  }
-
-  // seed Husain on first load
-  useEffect(() => {
-    (async () => {
-      const users = await DB.get("users") || {};
-      if (!users["husain dewaswala"]) {
-        users["husain dewaswala"] = { displayName:"Husain Dewaswala", pwHash: hashPw("7865253"), members: HUSAIN_MEMBERS, events: [] };
-        await DB.set("users", users);
-      }
-    })();
-  }, []);
-
-  if (!user) return (
-    <Shell>
-      {authScreen === "login"
-        ? <LoginScreen onLogin={handleLogin} onSwitch={() => setAuthScreen("register")} />
-        : <RegisterScreen onRegister={handleRegister} onSwitch={() => setAuthScreen("login")} />}
-    </Shell>
-  );
-  return <Shell><Dashboard user={user} onLogout={() => setUser(null)} /></Shell>;
-}
-
-/* ════════════════════════════════════════════════════════════════════════════
-   SHELL / LAYOUT
-═══════════════════════════════════════════════════════════════════════════════*/
-function Shell({ children }) {
-  return (
-    <div style={{ minHeight:"100vh", background:"linear-gradient(145deg,#0b0f1a 0%,#111827 60%,#0d1f1a 100%)", fontFamily:"Georgia,'Times New Roman',serif", color:"#e8dfc8", position:"relative", display:"flex", flexDirection:"column" }}>
-      <div style={{ position:"fixed", top:-100, right:-100, width:320, height:320, borderRadius:"50%", background:"radial-gradient(circle,rgba(212,175,55,0.10) 0%,transparent 70%)", pointerEvents:"none", zIndex:0 }} />
-      <div style={{ position:"fixed", bottom:-80, left:-80, width:240, height:240, borderRadius:"50%", background:"radial-gradient(circle,rgba(52,211,153,0.07) 0%,transparent 70%)", pointerEvents:"none", zIndex:0 }} />
-      <style>{`
-        @keyframes fadeUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
-        @keyframes popIn{from{transform:scale(0.88);opacity:0}to{transform:scale(1);opacity:1}}
-        @keyframes shimmer{0%,100%{opacity:1}50%{opacity:0.6}}
-        .fade-up{animation:fadeUp 0.45s ease both}
-        .pop-in{animation:popIn 0.25s ease both}
-        .btn-gold{background:linear-gradient(135deg,#b8860b,#d4af37,#f0c040);color:#0b0f1a;font-weight:700;border:none;border-radius:12px;cursor:pointer;font-family:Georgia,serif;letter-spacing:0.3px;transition:transform 0.12s,opacity 0.12s}
-        .btn-gold:active{transform:scale(0.96);opacity:0.85}
-        .btn-ghost{background:rgba(212,175,55,0.08);color:#d4af37;border:1.5px solid rgba(212,175,55,0.30);border-radius:12px;cursor:pointer;font-family:Georgia,serif;transition:background 0.15s}
-        .btn-ghost:hover{background:rgba(212,175,55,0.15)}
-        .btn-danger{background:rgba(239,68,68,0.12);color:#f87171;border:1.5px solid rgba(239,68,68,0.25);border-radius:12px;cursor:pointer;font-family:Georgia,serif;transition:background 0.15s}
-        .btn-danger:hover{background:rgba(239,68,68,0.2)}
-        .inp{background:rgba(255,255,255,0.05);border:1.5px solid rgba(212,175,55,0.20);border-radius:10px;padding:11px 14px;color:#e8dfc8;font-size:14px;font-family:Georgia,serif;width:100%;box-sizing:border-box;transition:border-color 0.2s}
-        .inp:focus{outline:none;border-color:rgba(212,175,55,0.55)}
-        .card{background:rgba(255,255,255,0.04);border:1.5px solid rgba(212,175,55,0.12);border-radius:16px}
-        .row-hover:hover{background:rgba(212,175,55,0.07)!important}
-        ::-webkit-scrollbar{width:4px}::-webkit-scrollbar-thumb{background:rgba(212,175,55,0.25);border-radius:4px}
-        input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none}
-      `}</style>
-      <div style={{ flex:1, position:"relative", zIndex:1 }}>{children}</div>
-      <footer style={{ textAlign:"center", padding:"14px 0 18px", fontSize:11, color:"#4a4030", letterSpacing:1.2, textTransform:"uppercase", zIndex:1, position:"relative" }}>
-        Made by Husain Dewaswala
-      </footer>
-    </div>
-  );
-}
-
-/* ════════════════════════════════════════════════════════════════════════════
-   AUTH — LOGIN
-═══════════════════════════════════════════════════════════════════════════════*/
-function LoginScreen({ onLogin, onSwitch }) {
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [showPw, setShowPw] = useState(false);
-
-  async function submit() {
-    if (!username.trim() || !password) { setError("Please fill all fields."); return; }
-    setLoading(true); setError("");
-    const err = await onLogin(username, password);
-    setLoading(false);
-    if (err) setError(err);
-  }
-
-  return (
-    <div style={{ maxWidth:380, margin:"0 auto", padding:"48px 20px 24px" }} className="fade-up">
-      <div style={{ textAlign:"center", marginBottom:36 }}>
-        <div style={{ fontSize:44, marginBottom:6 }}>🕌</div>
-        <h1 style={{ margin:0, fontSize:26, fontWeight:700, color:"#d4af37", letterSpacing:1.2 }}>Attendance Manager</h1>
-        <p style={{ margin:"6px 0 0", fontSize:11, color:"#5a4e38", letterSpacing:2, textTransform:"uppercase" }}>Group Leader Portal</p>
-      </div>
-      <div className="card" style={{ padding:"24px 20px" }}>
-        <p style={{ margin:"0 0 18px", fontSize:13, color:"#d4af37", fontWeight:700, letterSpacing:1, textTransform:"uppercase" }}>Sign In</p>
-        <div style={{ marginBottom:12 }}>
-          <label style={{ fontSize:11, color:"#8a7a5a", letterSpacing:1, textTransform:"uppercase", display:"block", marginBottom:5 }}>Username</label>
-          <input className="inp" placeholder="Your username" value={username} onChange={e=>setUsername(e.target.value)} onKeyDown={e=>e.key==="Enter"&&submit()} />
-        </div>
-        <div style={{ marginBottom:18 }}>
-          <label style={{ fontSize:11, color:"#8a7a5a", letterSpacing:1, textTransform:"uppercase", display:"block", marginBottom:5 }}>Password</label>
-          <div style={{ position:"relative" }}>
-            <input className="inp" type={showPw?"text":"password"} placeholder="Your password" value={password} onChange={e=>setPassword(e.target.value)} onKeyDown={e=>e.key==="Enter"&&submit()} style={{ paddingRight:44 }} />
-            <button onClick={()=>setShowPw(v=>!v)} style={{ position:"absolute", right:12, top:"50%", transform:"translateY(-50%)", background:"none", border:"none", cursor:"pointer", color:"#8a7a5a", fontSize:16 }}>{showPw?"🙈":"👁"}</button>
-          </div>
-        </div>
-        {error && <p style={{ margin:"0 0 12px", fontSize:12, color:"#f87171", background:"rgba(239,68,68,0.08)", padding:"8px 12px", borderRadius:8 }}>⚠ {error}</p>}
-        <button className="btn-gold" style={{ width:"100%", padding:"13px 0", fontSize:15 }} onClick={submit} disabled={loading}>
-          {loading ? "Signing in…" : "Sign In →"}
-        </button>
-      </div>
-      <p style={{ textAlign:"center", marginTop:18, fontSize:13, color:"#5a4e38" }}>
-        New group leader?{" "}
-        <span style={{ color:"#d4af37", cursor:"pointer", textDecoration:"underline" }} onClick={onSwitch}>Create Account</span>
-      </p>
-    </div>
-  );
-}
-
-/* ════════════════════════════════════════════════════════════════════════════
-   AUTH — REGISTER
-═══════════════════════════════════════════════════════════════════════════════*/
-function RegisterScreen({ onRegister, onSwitch }) {
-  const [displayName, setDisplayName] = useState("");
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const [confirm, setConfirm] = useState("");
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [showPw, setShowPw] = useState(false);
-
-  async function submit() {
-    if (!displayName.trim() || !username.trim() || !password) { setError("Please fill all fields."); return; }
-    if (password !== confirm) { setError("Passwords do not match."); return; }
-    if (password.length < 4) { setError("Password must be at least 4 characters."); return; }
-    setLoading(true); setError("");
-    const err = await onRegister(displayName, username, password);
-    setLoading(false);
-    if (err) setError(err);
-  }
-
-  return (
-    <div style={{ maxWidth:380, margin:"0 auto", padding:"36px 20px 24px" }} className="fade-up">
-      <div style={{ textAlign:"center", marginBottom:28 }}>
-        <div style={{ fontSize:40, marginBottom:6 }}>🕌</div>
-        <h1 style={{ margin:0, fontSize:22, fontWeight:700, color:"#d4af37", letterSpacing:1 }}>Create Account</h1>
-        <p style={{ margin:"5px 0 0", fontSize:11, color:"#5a4e38", letterSpacing:2, textTransform:"uppercase" }}>Group Leader Registration</p>
-      </div>
-      <div className="card" style={{ padding:"22px 20px" }}>
-        {[
-          { label:"Full Name", val:displayName, set:setDisplayName, ph:"e.g. Ahmed Ali", type:"text" },
-          { label:"Username", val:username, set:setUsername, ph:"Choose a username", type:"text" },
-        ].map(f => (
-          <div key={f.label} style={{ marginBottom:12 }}>
-            <label style={{ fontSize:11, color:"#8a7a5a", letterSpacing:1, textTransform:"uppercase", display:"block", marginBottom:5 }}>{f.label}</label>
-            <input className="inp" type={f.type} placeholder={f.ph} value={f.val} onChange={e=>f.set(e.target.value)} />
-          </div>
-        ))}
-        <div style={{ marginBottom:12 }}>
-          <label style={{ fontSize:11, color:"#8a7a5a", letterSpacing:1, textTransform:"uppercase", display:"block", marginBottom:5 }}>Password</label>
-          <div style={{ position:"relative" }}>
-            <input className="inp" type={showPw?"text":"password"} placeholder="Min. 4 characters" value={password} onChange={e=>setPassword(e.target.value)} style={{ paddingRight:44 }} />
-            <button onClick={()=>setShowPw(v=>!v)} style={{ position:"absolute", right:12, top:"50%", transform:"translateY(-50%)", background:"none", border:"none", cursor:"pointer", color:"#8a7a5a", fontSize:16 }}>{showPw?"🙈":"👁"}</button>
-          </div>
-        </div>
-        <div style={{ marginBottom:18 }}>
-          <label style={{ fontSize:11, color:"#8a7a5a", letterSpacing:1, textTransform:"uppercase", display:"block", marginBottom:5 }}>Confirm Password</label>
-          <input className="inp" type="password" placeholder="Re-enter password" value={confirm} onChange={e=>setConfirm(e.target.value)} onKeyDown={e=>e.key==="Enter"&&submit()} />
-        </div>
-        {error && <p style={{ margin:"0 0 12px", fontSize:12, color:"#f87171", background:"rgba(239,68,68,0.08)", padding:"8px 12px", borderRadius:8 }}>⚠ {error}</p>}
-        <button className="btn-gold" style={{ width:"100%", padding:"13px 0", fontSize:15 }} onClick={submit} disabled={loading}>
-          {loading ? "Creating…" : "Create Account →"}
-        </button>
-      </div>
-      <p style={{ textAlign:"center", marginTop:16, fontSize:13, color:"#5a4e38" }}>
-        Already have an account?{" "}
-        <span style={{ color:"#d4af37", cursor:"pointer", textDecoration:"underline" }} onClick={onSwitch}>Sign In</span>
-      </p>
-    </div>
-  );
-}
-
-/* ════════════════════════════════════════════════════════════════════════════
-   DASHBOARD (post-login router)
-═══════════════════════════════════════════════════════════════════════════════*/
-function Dashboard({ user, onLogout }) {
-  const [screen, setScreen] = useState("home");
-  const [userData, setUserData] = useState(null);
+  const [db, setDb] = useState(loadDB);
+  const [currentUser, setCurrentUser] = useState(() => {
+    const saved = sessionStorage.getItem("hajj_session");
+    return saved || null;
+  });
+  const [screen, setScreen] = useState("login"); // login | register | dashboard | members | addMember | events | attendance
   const [activeEvent, setActiveEvent] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [toast, showToast] = useToast();
 
-  async function loadData() {
-    const users = await DB.get("users") || {};
-    const u = users[user.username];
-    if (u) setUserData({ ...u, members: u.members || [], events: (u.events || []).map(e => ({ ...e, arrivedIds: new Set(e.arrivedIds || []) })) });
-    setLoading(false);
+  useEffect(() => { saveDB(db); }, [db]);
+
+  useEffect(() => {
+    if (currentUser) {
+      sessionStorage.setItem("hajj_session", currentUser);
+      setScreen("dashboard");
+    } else {
+      sessionStorage.removeItem("hajj_session");
+      setScreen("login");
+    }
+  }, [currentUser]);
+
+  const user = currentUser ? db.users[currentUser] : null;
+
+  function updateUser(updater) {
+    setDb(prev => {
+      const updated = { ...prev, users: { ...prev.users, [currentUser]: updater(prev.users[currentUser]) } };
+      return updated;
+    });
   }
 
-  async function saveData(updated) {
-    const users = await DB.get("users") || {};
-    users[user.username] = {
-      ...users[user.username],
-      members: updated.members,
-      events: updated.events.map(e => ({ ...e, arrivedIds: [...(e.arrivedIds || new Set())] }))
-    };
-    await DB.set("users", users);
-    setUserData(updated);
+  // ── Auth ──
+  function handleLogin(username, password) {
+    const slug = slugify(username);
+    const u = db.users[slug];
+    if (!u) { showToast("Account not found", "error"); return; }
+    if (u.password !== password) { showToast("Wrong password", "error"); return; }
+    setCurrentUser(slug);
+    showToast(`Welcome back, ${u.displayName}!`);
   }
 
-  useEffect(() => { loadData(); }, []);
+  function handleRegister(displayName, password) {
+    const slug = slugify(displayName);
+    if (db.users[slug]) { showToast("Username already taken", "error"); return; }
+    const newUser = { username: slug, displayName, password, members: [], events: [] };
+    setDb(prev => ({ ...prev, users: { ...prev.users, [slug]: newUser } }));
+    setCurrentUser(slug);
+    showToast(`Welcome, ${displayName}!`);
+  }
 
-  if (loading) return <div style={{ textAlign:"center", padding:60, color:"#d4af37", animation:"shimmer 1.2s infinite" }}>Loading…</div>;
+  function handleLogout() {
+    setCurrentUser(null);
+    setActiveEvent(null);
+  }
 
-  return (
-    <>
-      {screen === "home"       && <HomeScreen user={user} userData={userData} onLogout={onLogout} onNav={setScreen} />}
-      {screen === "members"    && <MembersScreen userData={userData} onSave={saveData} onBack={()=>setScreen("home")} />}
-      {screen === "events"     && <EventsScreen userData={userData} onSave={saveData} onBack={()=>setScreen("home")} onOpenEvent={ev=>{setActiveEvent(ev);setScreen("attendance");}} />}
-      {screen === "attendance" && activeEvent && <AttendanceScreen userData={userData} event={activeEvent} onSave={async(updatedEvent)=>{
-        const updated = { ...userData, events: userData.events.map(e=>e.id===updatedEvent.id?updatedEvent:e) };
-        await saveData(updated); setActiveEvent(updatedEvent);
-      }} onBack={()=>setScreen("events")} />}
-    </>
-  );
-}
-
-/* ════════════════════════════════════════════════════════════════════════════
-   HOME SCREEN
-═══════════════════════════════════════════════════════════════════════════════*/
-function HomeScreen({ user, userData, onLogout, onNav }) {
-  const members = userData?.members || [];
-  const events  = userData?.events  || [];
-  return (
-    <div style={{ maxWidth:420, margin:"0 auto", padding:"28px 18px 24px" }} className="fade-up">
-      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:28 }}>
-        <div>
-          <p style={{ margin:0, fontSize:11, color:"#5a4e38", letterSpacing:1.5, textTransform:"uppercase" }}>Welcome back</p>
-          <h2 style={{ margin:"3px 0 0", fontSize:20, color:"#d4af37", fontWeight:700 }}>{userData?.displayName || user.username}</h2>
-        </div>
-        <button className="btn-danger" style={{ padding:"8px 14px", fontSize:12 }} onClick={onLogout}>Sign Out</button>
-      </div>
-
-      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:10, marginBottom:24 }}>
-        <MiniStat label="Members" value={members.length} color="#d4af37" icon="👥" />
-        <MiniStat label="Events"  value={events.length}  color="#7dd3fc" icon="📅" />
-        <MiniStat label="Today"   value={new Date().toLocaleDateString("en-IN",{day:"2-digit",month:"short"})} color="#34d399" icon="📆" />
-      </div>
-
-      <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
-        <NavCard icon="📋" title="Manage Events" sub="Create events & mark attendance" color="#d4af37" onClick={()=>onNav("events")} />
-        <NavCard icon="👥" title="My Members"    sub={`${members.length} members in your group`} color="#7dd3fc" onClick={()=>onNav("members")} />
-      </div>
-    </div>
-  );
-}
-
-function NavCard({ icon, title, sub, color, onClick }) {
-  return (
-    <div onClick={onClick} style={{ display:"flex", alignItems:"center", gap:16, padding:"16px 18px", background:"rgba(255,255,255,0.04)", border:`1.5px solid ${color}22`, borderRadius:16, cursor:"pointer", transition:"background 0.15s,transform 0.12s" }}
-      onMouseEnter={e=>e.currentTarget.style.background="rgba(255,255,255,0.07)"}
-      onMouseLeave={e=>e.currentTarget.style.background="rgba(255,255,255,0.04)"}
-      onTouchStart={e=>e.currentTarget.style.transform="scale(0.97)"}
-      onTouchEnd={e=>e.currentTarget.style.transform="scale(1)"}>
-      <div style={{ width:46, height:46, borderRadius:12, background:`${color}18`, display:"flex", alignItems:"center", justifyContent:"center", fontSize:22 }}>{icon}</div>
-      <div>
-        <p style={{ margin:0, fontSize:15, fontWeight:700, color:"#e8dfc8" }}>{title}</p>
-        <p style={{ margin:"3px 0 0", fontSize:12, color:"#5a4e38" }}>{sub}</p>
-      </div>
-      <span style={{ marginLeft:"auto", color, fontSize:18 }}>›</span>
-    </div>
-  );
-}
-
-/* ════════════════════════════════════════════════════════════════════════════
-   MEMBERS SCREEN
-═══════════════════════════════════════════════════════════════════════════════*/
-function MembersScreen({ userData, onSave, onBack }) {
-  const [members, setMembers] = useState(userData?.members || []);
-  const [newName, setNewName] = useState("");
-  const [newId, setNewId]     = useState("");
-  const [newGender, setNewGender] = useState("male");
-  const [error, setError]     = useState("");
-  const [toast, setToast]     = useState(null);
-
-  function showToast(msg, type="success") { setToast({msg,type}); setTimeout(()=>setToast(null),2000); }
-
-  function addMember() {
-    const id = parseInt(newId);
-    if (!newName.trim())            { setError("Name is required."); return; }
-    if (isNaN(id) || id < 1)        { setError("Enter a valid number."); return; }
-    if (members.find(m=>m.id===id)) { setError(`No. ${id} is already assigned.`); return; }
-    const updated = [...members, { id, name:newName.trim(), gender:newGender }].sort((a,b)=>a.id-b.id);
-    setMembers(updated);
-    onSave({ ...userData, members: updated });
-    setNewName(""); setNewId(""); setError("");
-    showToast(`Member #${id} added!`);
+  // ── Members ──
+  function addMember(name, id) {
+    const members = user.members;
+    if (members.find(m => m.id === id)) { showToast(`ID #${id} already exists`, "error"); return false; }
+    if (members.find(m => m.name.toLowerCase() === name.toLowerCase())) { showToast("Member name already exists", "error"); return false; }
+    updateUser(u => ({ ...u, members: [...u.members, { id, name }].sort((a,b)=>a.id-b.id) }));
+    showToast(`${name} added!`);
+    return true;
   }
 
   function deleteMember(id) {
-    const updated = members.filter(m=>m.id!==id);
-    setMembers(updated);
-    onSave({ ...userData, members: updated });
-    showToast("Member removed.", "warn");
+    updateUser(u => ({ ...u, members: u.members.filter(m => m.id !== id) }));
+    showToast("Member removed");
   }
 
-  return (
-    <div style={{ maxWidth:420, margin:"0 auto", padding:"22px 18px 32px" }} className="fade-up">
-      {toast && <Toast msg={toast.msg} type={toast.type} />}
-      <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:20 }}>
-        <button className="btn-ghost" style={{ padding:"8px 14px", fontSize:13 }} onClick={onBack}>← Back</button>
-        <h2 style={{ margin:0, fontSize:18, color:"#d4af37" }}>My Members ({members.length})</h2>
-      </div>
+  function importFromExcel(file) {
+    const reader = new FileReader();
+    reader.onload = e => {
+      try {
+        const wb = XLSX.read(e.target.result, { type: "binary" });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const rows = XLSX.utils.sheet_to_json(ws, { header: 1 });
+        let added = 0, skipped = 0;
+        const newMembers = [...(user.members || [])];
+        rows.forEach(row => {
+          const id = parseInt(row[0]);
+          const name = String(row[1] || "").trim();
+          if (!id || !name) { skipped++; return; }
+          if (newMembers.find(m => m.id === id || m.name.toLowerCase() === name.toLowerCase())) { skipped++; return; }
+          newMembers.push({ id, name });
+          added++;
+        });
+        newMembers.sort((a,b) => a.id - b.id);
+        updateUser(u => ({ ...u, members: newMembers }));
+        showToast(`Imported ${added} members${skipped ? `, ${skipped} skipped` : ""}!`);
+      } catch { showToast("Invalid Excel file", "error"); }
+    };
+    reader.readAsBinaryString(file);
+  }
 
-      {/* Add member */}
-      <div className="card" style={{ padding:"16px", marginBottom:20 }}>
-        <p style={{ margin:"0 0 12px", fontSize:11, color:"#d4af37", letterSpacing:1.5, textTransform:"uppercase", fontWeight:700 }}>Add New Member</p>
-        <div style={{ display:"flex", gap:8, marginBottom:10 }}>
-          <input className="inp" placeholder="Assigned No." type="number" value={newId} onChange={e=>setNewId(e.target.value)} style={{ width:90, flex:"none" }} />
-          <input className="inp" placeholder="Member name" value={newName} onChange={e=>setNewName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addMember()} style={{ flex:1 }} />
-        </div>
-        <div style={{ display:"flex", gap:8, marginBottom:error?10:0 }}>
-          {["male","female"].map(g=>(
-            <button key={g} onClick={()=>setNewGender(g)} style={{ flex:1, padding:"9px 0", fontSize:13, borderRadius:10, border:`1.5px solid ${newGender===g?"#d4af37":"rgba(212,175,55,0.2)"}`, background:newGender===g?"rgba(212,175,55,0.15)":"transparent", color:newGender===g?"#d4af37":"#5a4e38", cursor:"pointer", fontFamily:"Georgia,serif" }}>
-              {g==="male"?"♂ Male":"♀ Female"}
-            </button>
-          ))}
-        </div>
-        {error && <p style={{ margin:"8px 0 10px", fontSize:12, color:"#f87171" }}>⚠ {error}</p>}
-        <button className="btn-gold" style={{ width:"100%", padding:"11px 0", fontSize:14, marginTop:10 }} onClick={addMember}>+ Add Member</button>
-      </div>
-
-      {/* Members list */}
-      {members.length === 0
-        ? <p style={{ textAlign:"center", color:"#4a4030", fontSize:13 }}>No members yet. Add your first member above.</p>
-        : <div style={{ display:"flex", flexDirection:"column", gap:7 }}>
-            {members.map(m=>(
-              <div key={m.id} className="row-hover" style={{ display:"flex", alignItems:"center", gap:10, background:"rgba(255,255,255,0.03)", border:"1px solid rgba(212,175,55,0.08)", borderRadius:11, padding:"9px 13px" }}>
-                <span style={{ minWidth:30, height:30, borderRadius:8, background:m.gender==="male"?"rgba(96,165,250,0.15)":"rgba(244,114,182,0.15)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:11, fontWeight:700, color:m.gender==="male"?"#93c5fd":"#f9a8d4" }}>{m.id}</span>
-                <span style={{ fontSize:13, color:"#e8dfc8", flex:1 }}>{m.name}</span>
-                <span style={{ fontSize:11, color:m.gender==="male"?"#93c5fd":"#f9a8d4" }}>{m.gender==="male"?"♂":"♀"}</span>
-                <button onClick={()=>deleteMember(m.id)} style={{ background:"none", border:"none", cursor:"pointer", color:"#4a4030", fontSize:16, padding:"0 4px" }} title="Remove">✕</button>
-              </div>
-            ))}
-          </div>
-      }
-    </div>
-  );
-}
-
-/* ════════════════════════════════════════════════════════════════════════════
-   EVENTS SCREEN
-═══════════════════════════════════════════════════════════════════════════════*/
-function EventsScreen({ userData, onSave, onBack, onOpenEvent }) {
-  const [events, setEvents] = useState(userData?.events || []);
-  const [name, setName]   = useState("");
-  const [date, setDate]   = useState("");
-  const [toast, setToast] = useState(null);
-  const total = userData?.members?.length || 0;
-
-  function showToast(msg,type="success"){setToast({msg,type});setTimeout(()=>setToast(null),2000);}
-
-  function createEvent() {
-    if (!name.trim() || !date) { showToast("Fill event name & date.","error"); return; }
-    const ev = { id:Date.now(), name:name.trim(), date, arrivedIds:new Set() };
-    const updated = [...events, ev];
-    setEvents(updated);
-    onSave({ ...userData, events: updated });
-    setName(""); setDate("");
+  // ── Events ──
+  function createEvent(name, date) {
+    if (!name.trim() || !date) { showToast("Fill event name & date", "error"); return; }
+    const ev = { id: Date.now(), name: name.trim(), date, arrivedIds: new Set() };
+    updateUser(u => ({ ...u, events: [...(u.events||[]), ev] }));
     showToast("Event created!");
   }
 
   function deleteEvent(id) {
-    const updated = events.filter(e=>e.id!==id);
-    setEvents(updated);
-    onSave({ ...userData, events: updated });
+    updateUser(u => ({ ...u, events: u.events.filter(e => e.id !== id) }));
+    showToast("Event deleted");
+  }
+
+  function openEvent(ev) {
+    setActiveEvent({ ...ev, arrivedIds: new Set(ev.arrivedIds) });
+    setScreen("attendance");
+  }
+
+  function saveAttendance(eventId, arrivedIds) {
+    updateUser(u => ({
+      ...u,
+      events: u.events.map(e => e.id === eventId ? { ...e, arrivedIds: new Set(arrivedIds) } : e)
+    }));
+  }
+
+  const screens = { login, register, dashboard, members, addMember, events, attendance };
+
+  return (
+    <div style={{ minHeight:"100vh", background: `linear-gradient(160deg, #F5EDD6 0%, #EDE0C4 50%, #E8D5A3 100%)`, position:"relative" }}>
+      {/* Decorative top bar */}
+      <div style={{ height:4, background:`linear-gradient(90deg, ${C.gold}, ${C.goldLight}, ${C.green}, ${C.goldLight}, ${C.gold})` }} />
+
+      {/* Toast */}
+      {toast && (
+        <div style={{
+          position:"fixed", top:16, left:"50%", transform:"translateX(-50%)",
+          zIndex:9999, padding:"12px 24px", borderRadius:50,
+          background: toast.type==="error" ? C.red : toast.type==="warn" ? "#E67E22" : C.green,
+          color:"#fff", fontSize:13, fontWeight:600, boxShadow:shadows.lg,
+          whiteSpace:"nowrap", maxWidth:"90vw", textAlign:"center",
+          animation:"toastIn 0.3s ease"
+        }}>
+          {toast.msg}
+        </div>
+      )}
+
+      <style>{`
+        @keyframes toastIn { from{opacity:0;transform:translateX(-50%) translateY(-12px)} to{opacity:1;transform:translateX(-50%) translateY(0)} }
+        @keyframes fadeUp { from{opacity:0;transform:translateY(20px)} to{opacity:1;transform:translateY(0)} }
+        @keyframes popIn { from{opacity:0;transform:scale(0.9)} to{opacity:1;transform:scale(1)} }
+        .screen { animation: fadeUp 0.35s ease; }
+        .btn-primary { background:linear-gradient(135deg,${C.gold},${C.goldLight}); color:${C.brown}; border:none; border-radius:14px; font-weight:700; cursor:pointer; font-family:Poppins,sans-serif; transition:all 0.2s; box-shadow:0 3px 12px rgba(184,134,11,0.3); }
+        .btn-primary:active { transform:scale(0.97); opacity:0.9; }
+        .btn-secondary { background:${C.white}; color:${C.brown}; border:2px solid ${C.border}; border-radius:14px; font-weight:600; cursor:pointer; font-family:Poppins,sans-serif; transition:all 0.2s; }
+        .btn-secondary:active { transform:scale(0.97); }
+        .btn-danger { background:linear-gradient(135deg,#E74C3C,#C0392B); color:#fff; border:none; border-radius:10px; font-weight:600; cursor:pointer; font-family:Poppins,sans-serif; transition:all 0.2s; }
+        .btn-danger:active { transform:scale(0.97); }
+        .btn-green { background:linear-gradient(135deg,${C.green},${C.greenLight}); color:#fff; border:none; border-radius:14px; font-weight:700; cursor:pointer; font-family:Poppins,sans-serif; transition:all 0.2s; box-shadow:0 3px 12px rgba(45,106,79,0.3); }
+        .btn-green:active { transform:scale(0.97); opacity:0.9; }
+        .input-field { background:${C.white}; border:2px solid ${C.border}; border-radius:12px; padding:13px 16px; font-size:15px; color:${C.text}; font-family:Poppins,sans-serif; width:100%; box-sizing:border-box; transition:border 0.2s; -webkit-appearance:none; }
+        .input-field:focus { outline:none; border-color:${C.gold}; box-shadow:0 0 0 3px rgba(184,134,11,0.12); }
+        .card { background:${C.cardBg}; border-radius:20px; box-shadow:${shadows.md}; border:1px solid rgba(212,175,55,0.2); }
+        .checkbox-custom { width:24px; height:24px; border-radius:8px; border:2.5px solid ${C.border}; display:flex; align-items:center; justify-content:center; cursor:pointer; transition:all 0.2s; flex-shrink:0; background:${C.white}; }
+        .checkbox-custom.checked { background:${C.green}; border-color:${C.green}; }
+        input[type=checkbox] { display:none; }
+        .member-row { display:flex; align-items:center; gap:12px; padding:12px 16px; border-bottom:1px solid rgba(212,175,55,0.15); transition:background 0.15s; cursor:pointer; }
+        .member-row:last-child { border-bottom:none; }
+        .member-row:active { background:rgba(212,175,55,0.1); }
+        input[type=date] { color-scheme: light; }
+        .tab-btn { padding:8px 16px; border-radius:20px; border:none; font-size:13px; font-weight:600; cursor:pointer; transition:all 0.2s; font-family:Poppins,sans-serif; }
+        .search-bar { display:flex; align-items:center; background:${C.white}; border:2px solid ${C.border}; border-radius:12px; padding:0 14px; gap:8px; }
+        .search-bar input { border:none; background:transparent; padding:12px 0; font-size:14px; color:${C.text}; font-family:Poppins,sans-serif; flex:1; }
+        .search-bar input:focus { outline:none; }
+      `}</style>
+
+      {/* Screens */}
+      {screen === "login" && <LoginScreen onLogin={handleLogin} onGoRegister={()=>setScreen("register")} />}
+      {screen === "register" && <RegisterScreen onRegister={handleRegister} onGoLogin={()=>setScreen("login")} />}
+      {screen === "dashboard" && user && <DashboardScreen user={user} onNav={setScreen} onLogout={handleLogout} />}
+      {screen === "members" && user && <MembersScreen user={user} onNav={setScreen} onDelete={deleteMember} onImport={importFromExcel} showToast={showToast} />}
+      {screen === "addMember" && user && <AddMemberScreen user={user} onAdd={addMember} onNav={setScreen} />}
+      {screen === "events" && user && <EventsScreen user={user} onNav={setScreen} onCreate={createEvent} onOpen={openEvent} onDelete={deleteEvent} />}
+      {screen === "attendance" && user && activeEvent && (
+        <AttendanceScreen
+          user={user} event={activeEvent}
+          onSave={(ids) => { saveAttendance(activeEvent.id, ids); showToast("Attendance saved!"); }}
+          onBack={() => { setActiveEvent(null); setScreen("events"); }}
+          showToast={showToast}
+        />
+      )}
+    </div>
+  );
+}
+
+// ─── Login Screen ─────────────────────────────────────────────────────────────
+function LoginScreen({ onLogin, onGoRegister }) {
+  const [name, setName] = useState("");
+  const [pass, setPass] = useState("");
+  const [showPass, setShowPass] = useState(false);
+
+  return (
+    <div className="screen" style={{ maxWidth:420, margin:"0 auto", padding:"24px 20px 40px" }}>
+      <HajjHeader subtitle="Group Attendance System" />
+
+      <div className="card" style={{ padding:28, marginBottom:20 }}>
+        <h2 style={{ fontSize:20, fontWeight:700, color:C.brown, marginBottom:6, textAlign:"center" }}>Welcome Back</h2>
+        <p style={{ fontSize:13, color:C.textLight, textAlign:"center", marginBottom:24 }}>Sign in to your leader account</p>
+
+        <label style={labelStyle}>Full Name</label>
+        <input className="input-field" style={{ marginBottom:14 }} placeholder="e.g. Husain Dewaswala"
+          value={name} onChange={e=>setName(e.target.value)} />
+
+        <label style={labelStyle}>Password</label>
+        <div style={{ position:"relative", marginBottom:24 }}>
+          <input className="input-field" type={showPass?"text":"password"} placeholder="Enter password"
+            value={pass} onChange={e=>setPass(e.target.value)}
+            onKeyDown={e=>e.key==="Enter"&&onLogin(name,pass)}
+            style={{ paddingRight:48 }} />
+          <button onClick={()=>setShowPass(v=>!v)} style={{ position:"absolute", right:14, top:"50%", transform:"translateY(-50%)", background:"none", border:"none", cursor:"pointer", fontSize:16, color:C.textLight }}>{showPass?"🙈":"👁"}</button>
+        </div>
+
+        <button className="btn-primary" style={{ width:"100%", padding:"15px 0", fontSize:16 }} onClick={()=>onLogin(name,pass)}>
+          {Icon.mosque} Sign In
+        </button>
+      </div>
+
+      <p style={{ textAlign:"center", fontSize:14, color:C.textLight }}>
+        New leader?{" "}
+        <span onClick={onGoRegister} style={{ color:C.gold, fontWeight:700, cursor:"pointer" }}>Create Account</span>
+      </p>
+
+      <Footer />
+    </div>
+  );
+}
+
+// ─── Register Screen ──────────────────────────────────────────────────────────
+function RegisterScreen({ onRegister, onGoLogin }) {
+  const [name, setName] = useState("");
+  const [pass, setPass] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [showPass, setShowPass] = useState(false);
+
+  function handleSubmit() {
+    if (!name.trim()) { alert("Enter your full name"); return; }
+    if (pass.length < 4) { alert("Password must be at least 4 characters"); return; }
+    if (pass !== confirm) { alert("Passwords don't match"); return; }
+    onRegister(name.trim(), pass);
   }
 
   return (
-    <div style={{ maxWidth:420, margin:"0 auto", padding:"22px 18px 32px" }} className="fade-up">
-      {toast && <Toast msg={toast.msg} type={toast.type} />}
-      <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:20 }}>
-        <button className="btn-ghost" style={{ padding:"8px 14px", fontSize:13 }} onClick={onBack}>← Back</button>
-        <h2 style={{ margin:0, fontSize:18, color:"#d4af37" }}>Events</h2>
+    <div className="screen" style={{ maxWidth:420, margin:"0 auto", padding:"24px 20px 40px" }}>
+      <HajjHeader subtitle="Group Attendance System" />
+
+      <div className="card" style={{ padding:28, marginBottom:20 }}>
+        <h2 style={{ fontSize:20, fontWeight:700, color:C.brown, marginBottom:6, textAlign:"center" }}>Create Account</h2>
+        <p style={{ fontSize:13, color:C.textLight, textAlign:"center", marginBottom:24 }}>Register as a Group Leader</p>
+
+        <label style={labelStyle}>Your Full Name</label>
+        <input className="input-field" style={{ marginBottom:14 }} placeholder="e.g. Ahmed Ali"
+          value={name} onChange={e=>setName(e.target.value)} />
+
+        <label style={labelStyle}>Password</label>
+        <div style={{ position:"relative", marginBottom:14 }}>
+          <input className="input-field" type={showPass?"text":"password"} placeholder="Create a password"
+            value={pass} onChange={e=>setPass(e.target.value)} style={{ paddingRight:48 }} />
+          <button onClick={()=>setShowPass(v=>!v)} style={{ position:"absolute", right:14, top:"50%", transform:"translateY(-50%)", background:"none", border:"none", cursor:"pointer", fontSize:16, color:C.textLight }}>{showPass?"🙈":"👁"}</button>
+        </div>
+
+        <label style={labelStyle}>Confirm Password</label>
+        <input className="input-field" type="password" style={{ marginBottom:24 }} placeholder="Re-enter password"
+          value={confirm} onChange={e=>setConfirm(e.target.value)}
+          onKeyDown={e=>e.key==="Enter"&&handleSubmit()} />
+
+        <button className="btn-primary" style={{ width:"100%", padding:"15px 0", fontSize:16 }} onClick={handleSubmit}>
+          {Icon.kaaba} Create Account
+        </button>
       </div>
 
-      <div className="card" style={{ padding:"16px", marginBottom:22 }}>
-        <p style={{ margin:"0 0 12px", fontSize:11, color:"#d4af37", letterSpacing:1.5, textTransform:"uppercase", fontWeight:700 }}>Create New Event</p>
-        <input className="inp" placeholder="Event name (e.g. Majlis 1, Ashura…)" value={name} onChange={e=>setName(e.target.value)} style={{ marginBottom:10 }} />
-        <input className="inp" type="date" value={date} onChange={e=>setDate(e.target.value)} style={{ marginBottom:12 }} />
-        <button className="btn-gold" style={{ width:"100%", padding:"12px 0", fontSize:14 }} onClick={createEvent}>+ Create Event</button>
+      <p style={{ textAlign:"center", fontSize:14, color:C.textLight }}>
+        Already have an account?{" "}
+        <span onClick={onGoLogin} style={{ color:C.gold, fontWeight:700, cursor:"pointer" }}>Sign In</span>
+      </p>
+
+      <Footer />
+    </div>
+  );
+}
+
+// ─── Dashboard ────────────────────────────────────────────────────────────────
+function DashboardScreen({ user, onNav, onLogout }) {
+  const totalMembers = user.members.length;
+  const totalEvents = user.events.length;
+  const lastEvent = user.events[user.events.length - 1];
+  const lastPct = lastEvent ? Math.round(([...lastEvent.arrivedIds].length / totalMembers) * 100) || 0 : 0;
+
+  return (
+    <div className="screen" style={{ maxWidth:420, margin:"0 auto", padding:"0 0 40px" }}>
+      {/* Header */}
+      <div style={{ background:`linear-gradient(135deg, ${C.green} 0%, #1a4a35 100%)`, padding:"28px 20px 24px", borderRadius:"0 0 28px 28px", boxShadow:shadows.lg }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
+          <div>
+            <p style={{ color:"rgba(255,255,255,0.7)", fontSize:12, letterSpacing:2, textTransform:"uppercase", marginBottom:4 }}>{Icon.mosque} Hajj Attendance</p>
+            <h1 style={{ color:"#fff", fontSize:22, fontWeight:700, margin:0 }}>As-Salāmu ʿAlaykum</h1>
+            <p style={{ color:C.goldLight, fontSize:15, fontWeight:600, marginTop:4 }}>{user.displayName}</p>
+          </div>
+          <button onClick={onLogout} style={{ background:"rgba(255,255,255,0.15)", border:"none", borderRadius:12, padding:"8px 12px", color:"#fff", cursor:"pointer", fontSize:13, fontWeight:600 }}>
+            Sign Out
+          </button>
+        </div>
+
+        {/* Stats row */}
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:10, marginTop:20 }}>
+          <StatPill label="Members" value={totalMembers} icon="👥" />
+          <StatPill label="Events" value={totalEvents} icon="📋" />
+          <StatPill label="Last Event" value={lastEvent ? `${lastPct}%` : "—"} icon="📊" />
+        </div>
       </div>
 
-      {events.length===0
-        ? <p style={{ textAlign:"center", color:"#4a4030", fontSize:13 }}>No events yet.</p>
-        : <div style={{ display:"flex", flexDirection:"column", gap:11 }}>
-            {events.map(ev=>{
-              const count = ev.arrivedIds?.size ?? 0;
-              const pct   = total ? Math.round((count/total)*100) : 0;
-              return (
-                <div key={ev.id} className="card pop-in" style={{ padding:"14px 16px", cursor:"pointer" }}>
-                  <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:8 }} onClick={()=>onOpenEvent(ev)}>
+      {/* Kaaba illustration */}
+      <div style={{ textAlign:"center", padding:"20px 0 8px", fontSize:48 }}>🕋</div>
+      <p style={{ textAlign:"center", fontSize:12, color:C.textLight, letterSpacing:1.5, textTransform:"uppercase", marginBottom:20 }}>لَبَّيْكَ اللَّهُمَّ لَبَّيْكَ</p>
+
+      {/* Menu Cards */}
+      <div style={{ padding:"0 20px", display:"flex", flexDirection:"column", gap:14 }}>
+        <MenuCard icon="👥" title="Manage Members" desc={`${totalMembers} members in your group`} color={C.gold} onClick={()=>onNav("members")} />
+        <MenuCard icon="📋" title="Events & Attendance" desc={`${totalEvents} events created`} color={C.green} onClick={()=>onNav("events")} />
+      </div>
+
+      <Footer />
+    </div>
+  );
+}
+
+// ─── Members Screen ───────────────────────────────────────────────────────────
+function MembersScreen({ user, onNav, onDelete, onImport, showToast }) {
+  const [search, setSearch] = useState("");
+  const [confirmDelete, setConfirmDelete] = useState(null);
+  const fileRef = useRef(null);
+
+  const filtered = user.members.filter(m =>
+    m.name.toLowerCase().includes(search.toLowerCase()) || String(m.id).includes(search)
+  );
+
+  return (
+    <div className="screen" style={{ maxWidth:420, margin:"0 auto", padding:"0 0 40px" }}>
+      <TopBar title="Group Members" onBack={()=>onNav("dashboard")} />
+
+      <div style={{ padding:"16px 20px 0" }}>
+        {/* Actions */}
+        <div style={{ display:"flex", gap:10, marginBottom:14 }}>
+          <button className="btn-primary" style={{ flex:1, padding:"12px 0", fontSize:14 }} onClick={()=>onNav("addMember")}>
+            + Add Member
+          </button>
+          <button className="btn-secondary" style={{ flex:1, padding:"12px 0", fontSize:13 }} onClick={()=>fileRef.current.click()}>
+            📊 Import Excel
+          </button>
+          <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" style={{ display:"none" }}
+            onChange={e=>{ if(e.target.files[0]) { onImport(e.target.files[0]); e.target.value=""; } }} />
+        </div>
+
+        {/* Excel format hint */}
+        <div style={{ background:"rgba(184,134,11,0.08)", border:`1px solid rgba(184,134,11,0.25)`, borderRadius:10, padding:"8px 14px", marginBottom:14, fontSize:12, color:C.brownLight }}>
+          📊 Excel format: Column A = ID number, Column B = Member name
+        </div>
+
+        {/* Search */}
+        <div className="search-bar" style={{ marginBottom:14 }}>
+          <span style={{ fontSize:16 }}>🔍</span>
+          <input placeholder="Search by name or number…" value={search} onChange={e=>setSearch(e.target.value)} />
+          {search && <span onClick={()=>setSearch("")} style={{ cursor:"pointer", color:C.textLight, fontSize:18 }}>×</span>}
+        </div>
+
+        <p style={{ fontSize:12, color:C.textLight, marginBottom:10 }}>{filtered.length} of {user.members.length} members</p>
+      </div>
+
+      {/* List */}
+      <div className="card" style={{ margin:"0 20px", overflow:"hidden" }}>
+        {filtered.length === 0 ? (
+          <div style={{ padding:40, textAlign:"center", color:C.textLight }}>
+            <div style={{ fontSize:40, marginBottom:8 }}>👥</div>
+            <p>{user.members.length === 0 ? "No members yet. Add or import members." : "No results found."}</p>
+          </div>
+        ) : filtered.map(m => (
+          <div key={m.id} className="member-row">
+            <span style={{ width:36, height:36, borderRadius:10, background:C.goldPale, display:"flex", alignItems:"center", justifyContent:"center", fontSize:13, fontWeight:700, color:C.brown, flexShrink:0 }}>{m.id}</span>
+            <span style={{ flex:1, fontSize:14, color:C.text, fontWeight:500 }}>{m.name}</span>
+            {confirmDelete === m.id ? (
+              <div style={{ display:"flex", gap:6 }}>
+                <button className="btn-danger" style={{ padding:"5px 10px", fontSize:12 }} onClick={()=>{ onDelete(m.id); setConfirmDelete(null); }}>Delete</button>
+                <button className="btn-secondary" style={{ padding:"5px 10px", fontSize:12 }} onClick={()=>setConfirmDelete(null)}>Cancel</button>
+              </div>
+            ) : (
+              <button onClick={()=>setConfirmDelete(m.id)} style={{ background:"none", border:"none", cursor:"pointer", color:"#ccc", fontSize:18, padding:"4px 8px" }}>✕</button>
+            )}
+          </div>
+        ))}
+      </div>
+
+      <Footer />
+    </div>
+  );
+}
+
+// ─── Add Member Screen ────────────────────────────────────────────────────────
+function AddMemberScreen({ user, onAdd, onNav }) {
+  const [name, setName] = useState("");
+  const [id, setId] = useState("");
+
+  const nextId = user.members.length > 0 ? Math.max(...user.members.map(m=>m.id)) + 1 : 1;
+
+  function handleAdd() {
+    const numId = parseInt(id);
+    if (!name.trim()) { alert("Enter member name"); return; }
+    if (!numId || numId < 1) { alert("Enter a valid ID number"); return; }
+    const success = onAdd(name.trim(), numId);
+    if (success) { setName(""); setId(String(nextId + 1)); }
+  }
+
+  useEffect(() => { setId(String(nextId)); }, []);
+
+  return (
+    <div className="screen" style={{ maxWidth:420, margin:"0 auto", padding:"0 0 40px" }}>
+      <TopBar title="Add Member" onBack={()=>onNav("members")} />
+
+      <div style={{ padding:"20px" }}>
+        <div className="card" style={{ padding:24 }}>
+          <div style={{ textAlign:"center", fontSize:40, marginBottom:12 }}>👤</div>
+          <label style={labelStyle}>Member ID Number</label>
+          <input className="input-field" type="number" style={{ marginBottom:14 }} placeholder="e.g. 1"
+            value={id} onChange={e=>setId(e.target.value)} />
+
+          <label style={labelStyle}>Member Full Name</label>
+          <input className="input-field" style={{ marginBottom:24 }} placeholder="e.g. Ahmed Ali"
+            value={name} onChange={e=>setName(e.target.value)}
+            onKeyDown={e=>e.key==="Enter"&&handleAdd()} />
+
+          <button className="btn-primary" style={{ width:"100%", padding:"15px 0", fontSize:16 }} onClick={handleAdd}>
+            + Add Member
+          </button>
+        </div>
+
+        <div style={{ marginTop:16, background:"rgba(45,106,79,0.08)", border:`1px solid rgba(45,106,79,0.2)`, borderRadius:12, padding:14, fontSize:13, color:C.green }}>
+          💡 Tip: You can also import multiple members at once using an Excel sheet from the Members page.
+        </div>
+      </div>
+      <Footer />
+    </div>
+  );
+}
+
+// ─── Events Screen ────────────────────────────────────────────────────────────
+function EventsScreen({ user, onNav, onCreate, onOpen, onDelete }) {
+  const [evName, setEvName] = useState("");
+  const [evDate, setEvDate] = useState("");
+  const [confirmDelete, setConfirmDelete] = useState(null);
+  const [showForm, setShowForm] = useState(false);
+
+  return (
+    <div className="screen" style={{ maxWidth:420, margin:"0 auto", padding:"0 0 40px" }}>
+      <TopBar title="Events" onBack={()=>onNav("dashboard")} />
+
+      <div style={{ padding:"16px 20px 0" }}>
+        <button className="btn-primary" style={{ width:"100%", padding:"13px 0", fontSize:15, marginBottom:16 }} onClick={()=>setShowForm(v=>!v)}>
+          {showForm ? "✕ Cancel" : "+ Create New Event"}
+        </button>
+
+        {showForm && (
+          <div className="card" style={{ padding:20, marginBottom:16, animation:"popIn 0.2s ease" }}>
+            <label style={labelStyle}>Event Name</label>
+            <input className="input-field" style={{ marginBottom:12 }} placeholder="e.g. Arafat Day Majlis"
+              value={evName} onChange={e=>setEvName(e.target.value)} />
+            <label style={labelStyle}>Date</label>
+            <input className="input-field" type="date" style={{ marginBottom:16 }}
+              value={evDate} onChange={e=>setEvDate(e.target.value)} />
+            <button className="btn-green" style={{ width:"100%", padding:"13px 0", fontSize:15 }}
+              onClick={()=>{ onCreate(evName,evDate); setEvName(""); setEvDate(""); setShowForm(false); }}>
+              ✓ Create Event
+            </button>
+          </div>
+        )}
+      </div>
+
+      {user.events.length === 0 ? (
+        <div style={{ textAlign:"center", padding:"60px 20px", color:C.textLight }}>
+          <div style={{ fontSize:48, marginBottom:12 }}>📋</div>
+          <p>No events yet. Create your first event!</p>
+        </div>
+      ) : (
+        <div style={{ padding:"0 20px", display:"flex", flexDirection:"column", gap:12 }}>
+          {[...user.events].reverse().map(ev => {
+            const total = user.members.length;
+            const arrived = ev.arrivedIds.size;
+            const pct = total ? Math.round((arrived/total)*100) : 0;
+            return (
+              <div key={ev.id} className="card" style={{ padding:0, overflow:"hidden" }}>
+                <div style={{ padding:"16px 16px 12px", cursor:"pointer" }} onClick={()=>onOpen(ev)}>
+                  <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:10 }}>
                     <div>
-                      <p style={{ margin:0, fontSize:15, fontWeight:700, color:"#e8dfc8" }}>{ev.name}</p>
-                      <p style={{ margin:"3px 0 0", fontSize:11, color:"#5a4e38" }}>📅 {formatDate(ev.date)}</p>
+                      <p style={{ margin:0, fontSize:15, fontWeight:700, color:C.text }}>{ev.name}</p>
+                      <p style={{ margin:"3px 0 0", fontSize:12, color:C.textLight }}>📅 {formatDate(ev.date)}</p>
                     </div>
-                    <span style={{ fontSize:12, color:"#d4af37", background:"rgba(212,175,55,0.1)", padding:"4px 10px", borderRadius:20, fontWeight:600 }}>{pct}%</span>
+                    <span style={{ background: pct===100?C.green:C.goldPale, color:pct===100?"#fff":C.brown, fontSize:13, fontWeight:700, padding:"4px 12px", borderRadius:20 }}>{pct}%</span>
                   </div>
-                  <div style={{ height:5, background:"rgba(255,255,255,0.06)", borderRadius:6, overflow:"hidden", marginBottom:8 }} onClick={()=>onOpenEvent(ev)}>
-                    <div style={{ height:"100%", width:`${pct}%`, background:"linear-gradient(90deg,#c9a227,#e8c84a)", borderRadius:6, transition:"width 0.4s" }} />
+                  <div style={{ height:6, background:"rgba(0,0,0,0.06)", borderRadius:8, overflow:"hidden", marginBottom:8 }}>
+                    <div style={{ height:"100%", width:`${pct}%`, background:`linear-gradient(90deg,${C.green},${C.greenLight})`, borderRadius:8, transition:"width 0.4s" }} />
                   </div>
-                  <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
-                    <div style={{ fontSize:12, color:"#5a4e38", display:"flex", gap:14 }} onClick={()=>onOpenEvent(ev)}>
-                      <span>✅ {count} arrived</span>
-                      <span>⏳ {total-count} remaining</span>
-                    </div>
-                    <button onClick={()=>deleteEvent(ev.id)} style={{ background:"none", border:"none", cursor:"pointer", color:"#4a4030", fontSize:14 }}>🗑</button>
+                  <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, color:C.textLight }}>
+                    <span>✅ {arrived} arrived</span>
+                    <span>⏳ {total-arrived} remaining</span>
                   </div>
                 </div>
-              );
-            })}
-          </div>
-      }
+                <div style={{ borderTop:`1px solid rgba(212,175,55,0.15)`, padding:"10px 16px", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                  <button className="btn-green" style={{ padding:"8px 20px", fontSize:13 }} onClick={()=>onOpen(ev)}>
+                    Mark Attendance →
+                  </button>
+                  {confirmDelete===ev.id ? (
+                    <div style={{ display:"flex", gap:8 }}>
+                      <button className="btn-danger" style={{ padding:"6px 12px", fontSize:12 }} onClick={()=>{ onDelete(ev.id); setConfirmDelete(null); }}>Delete</button>
+                      <button className="btn-secondary" style={{ padding:"6px 12px", fontSize:12 }} onClick={()=>setConfirmDelete(null)}>Cancel</button>
+                    </div>
+                  ) : (
+                    <button onClick={()=>setConfirmDelete(ev.id)} style={{ background:"none", border:"none", cursor:"pointer", color:"#ccc", fontSize:18 }}>🗑</button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      <Footer />
     </div>
   );
 }
 
-/* ════════════════════════════════════════════════════════════════════════════
-   ATTENDANCE SCREEN
-═══════════════════════════════════════════════════════════════════════════════*/
-function AttendanceScreen({ userData, event, onSave, onBack }) {
-  const members = userData?.members || [];
-  const total   = members.length;
-  const [arrivedIds, setArrivedIds] = useState(new Set(event.arrivedIds || []));
-  const [inputVal, setInputVal]     = useState("");
-  const [dropOpen, setDropOpen]     = useState(false);
-  const [search, setSearch]         = useState("");
-  const [toast, setToast]           = useState(null);
-  const [flashId, setFlashId]       = useState(null);
-  const dropRef = useRef(null);
+// ─── Attendance Screen ────────────────────────────────────────────────────────
+function AttendanceScreen({ user, event, onSave, onBack, showToast }) {
+  const [arrivedIds, setArrivedIds] = useState(new Set(event.arrivedIds));
+  const [search, setSearch] = useState("");
+  const [tab, setTab] = useState("all"); // all | arrived | remaining
+  const [lastChanged, setLastChanged] = useState(null);
 
-  const filtered = members.filter(m=>{
-    const s = search.toLowerCase();
-    return m.name.toLowerCase().includes(s) || String(m.id).includes(s);
+  const members = user.members;
+  const total = members.length;
+  const arrivedCount = arrivedIds.size;
+  const pct = total ? Math.round((arrivedCount/total)*100) : 0;
+
+  function toggle(id) {
+    setArrivedIds(prev => {
+      const n = new Set(prev);
+      if (n.has(id)) { n.delete(id); }
+      else { n.add(id); }
+      return n;
+    });
+    setLastChanged(id);
+    // auto-save
+    const updated = new Set(arrivedIds);
+    if (updated.has(id)) updated.delete(id); else updated.add(id);
+    onSave(updated);
+  }
+
+  function markAll() {
+    const all = new Set(members.map(m=>m.id));
+    setArrivedIds(all);
+    onSave(all);
+    showToast("All members marked present!");
+  }
+
+  function clearAll() {
+    setArrivedIds(new Set());
+    onSave(new Set());
+    showToast("Attendance cleared", "warn");
+  }
+
+  const displayMembers = members.filter(m => {
+    const matchSearch = m.name.toLowerCase().includes(search.toLowerCase()) || String(m.id).includes(search);
+    if (!matchSearch) return false;
+    if (tab === "arrived") return arrivedIds.has(m.id);
+    if (tab === "remaining") return !arrivedIds.has(m.id);
+    return true;
   });
 
-  function showToast(msg,type="success"){setToast({msg,type});setTimeout(()=>setToast(null),2200);}
-
-  function flash(id){setFlashId(id);setTimeout(()=>setFlashId(null),700);}
-
-  function markArrived(m) {
-    if (arrivedIds.has(m.id)) { showToast(`#${m.id} already marked!`,"warn"); flash(m.id); return; }
-    const next = new Set([...arrivedIds, m.id]);
-    setArrivedIds(next);
-    onSave({ ...event, arrivedIds: next });
-    showToast(`✓ ${m.name} present`,"success");
-    flash(m.id);
-  }
-
-  function unmark(id) {
-    const next = new Set([...arrivedIds].filter(x=>x!==id));
-    setArrivedIds(next);
-    onSave({ ...event, arrivedIds: next });
-  }
-
-  function submitNumber() {
-    const n = parseInt(inputVal.trim());
-    if (isNaN(n)) { showToast("Enter a valid number","error"); return; }
-    const m = members.find(x=>x.id===n);
-    if (!m) { showToast(`No member with no. ${n}`,"error"); return; }
-    markArrived(m); setInputVal("");
-  }
-
-  useEffect(()=>{
-    function h(e){if(dropRef.current&&!dropRef.current.contains(e.target)){setDropOpen(false);setSearch("");}}
-    document.addEventListener("mousedown",h);
-    return()=>document.removeEventListener("mousedown",h);
-  },[]);
-
-  const arrived   = [...arrivedIds].map(id=>members.find(m=>m.id===id)).filter(Boolean);
-  const remaining = members.filter(m=>!arrivedIds.has(m.id));
-  const pct       = total ? Math.round((arrivedIds.size/total)*100) : 0;
-
   return (
-    <div style={{ maxWidth:420, margin:"0 auto", padding:"20px 16px 36px" }} className="fade-up">
-      {toast && <Toast msg={toast.msg} type={toast.type} />}
+    <div className="screen" style={{ maxWidth:420, margin:"0 auto", padding:"0 0 40px" }}>
+      {/* Header */}
+      <div style={{ background:`linear-gradient(135deg, ${C.green} 0%, #1a4a35 100%)`, padding:"20px 20px 24px", borderRadius:"0 0 24px 24px" }}>
+        <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:16 }}>
+          <button onClick={onBack} style={{ background:"rgba(255,255,255,0.15)", border:"none", borderRadius:10, padding:"8px 14px", color:"#fff", cursor:"pointer", fontSize:14, fontWeight:600 }}>← Back</button>
+          <div>
+            <p style={{ margin:0, fontSize:16, fontWeight:700, color:"#fff" }}>{event.name}</p>
+            <p style={{ margin:0, fontSize:11, color:"rgba(255,255,255,0.7)" }}>📅 {formatDate(event.date)}</p>
+          </div>
+        </div>
 
-      <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:18 }}>
-        <button className="btn-ghost" style={{ padding:"8px 12px", fontSize:12 }} onClick={onBack}>← Back</button>
-        <div>
-          <p style={{ margin:0, fontSize:16, fontWeight:700, color:"#d4af37" }}>{event.name}</p>
-          <p style={{ margin:0, fontSize:11, color:"#5a4e38" }}>📅 {formatDate(event.date)}</p>
+        {/* Stats */}
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:10, marginBottom:14 }}>
+          <StatPill label="Total" value={total} icon="👥" />
+          <StatPill label="Arrived" value={arrivedCount} icon="✅" highlight />
+          <StatPill label="Remaining" value={total-arrivedCount} icon="⏳" />
+        </div>
+
+        {/* Progress */}
+        <div style={{ height:8, background:"rgba(255,255,255,0.2)", borderRadius:10, overflow:"hidden", marginBottom:6 }}>
+          <div style={{ height:"100%", width:`${pct}%`, background:`linear-gradient(90deg,${C.goldLight},${C.goldPale})`, borderRadius:10, transition:"width 0.4s" }} />
+        </div>
+        <p style={{ color:"rgba(255,255,255,0.8)", fontSize:12, textAlign:"right", margin:0 }}>{pct}% attendance</p>
+      </div>
+
+      <div style={{ padding:"16px 20px 0" }}>
+        {/* Quick actions */}
+        <div style={{ display:"flex", gap:8, marginBottom:14 }}>
+          <button className="btn-green" style={{ flex:1, padding:"10px 0", fontSize:13 }} onClick={markAll}>✓ Mark All</button>
+          <button className="btn-secondary" style={{ flex:1, padding:"10px 0", fontSize:13 }} onClick={clearAll}>↺ Clear All</button>
+        </div>
+
+        {/* Search */}
+        <div className="search-bar" style={{ marginBottom:12 }}>
+          <span>🔍</span>
+          <input placeholder="Search member…" value={search} onChange={e=>setSearch(e.target.value)} />
+          {search && <span onClick={()=>setSearch("")} style={{ cursor:"pointer", color:C.textLight, fontSize:18 }}>×</span>}
+        </div>
+
+        {/* Tabs */}
+        <div style={{ display:"flex", gap:8, marginBottom:14, background:"rgba(255,255,255,0.6)", borderRadius:14, padding:4 }}>
+          {[["all","All"],["arrived","✅ Arrived"],["remaining","⏳ Remaining"]].map(([val,label])=>(
+            <button key={val} className="tab-btn" style={{ flex:1, background:tab===val?C.white:"transparent", color:tab===val?C.green:C.textLight, boxShadow:tab===val?shadows.sm:"none" }}
+              onClick={()=>setTab(val)}>{label}</button>
+          ))}
         </div>
       </div>
 
-      {/* Stats */}
-      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:10, marginBottom:16 }}>
-        <MiniStat label="Total"     value={total}              color="#d4af37" />
-        <MiniStat label="Arrived"   value={arrivedIds.size}    color="#4ade80" />
-        <MiniStat label="Remaining" value={total-arrivedIds.size} color="#f87171" />
-      </div>
-
-      {/* Progress */}
-      <div style={{ marginBottom:20 }}>
-        <div style={{ height:8, background:"rgba(255,255,255,0.07)", borderRadius:10, overflow:"hidden" }}>
-          <div style={{ height:"100%", width:`${pct}%`, background:"linear-gradient(90deg,#22c55e,#4ade80)", borderRadius:10, transition:"width 0.5s" }} />
-        </div>
-        <p style={{ margin:"5px 0 0", fontSize:11, color:"#5a4e38", textAlign:"right" }}>{pct}% attendance</p>
-      </div>
-
-      {/* Mark attendance */}
-      <div className="card" style={{ padding:"16px", marginBottom:20 }}>
-        <p style={{ margin:"0 0 12px", fontSize:11, color:"#d4af37", letterSpacing:1.5, textTransform:"uppercase", fontWeight:700 }}>Mark Attendance</p>
-        <div style={{ display:"flex", gap:8, marginBottom:12 }}>
-          <input className="inp" type="number" placeholder={`Enter no. (1–${total||"?"})`} value={inputVal}
-            onChange={e=>setInputVal(e.target.value)} onKeyDown={e=>e.key==="Enter"&&submitNumber()} style={{ flex:1 }} />
-          <button className="btn-gold" style={{ padding:"11px 16px", fontSize:15, borderRadius:10 }} onClick={submitNumber}>✓</button>
-        </div>
-        <div style={{ position:"relative" }} ref={dropRef}>
-          <button className="btn-ghost" style={{ width:"100%", padding:"11px 14px", fontSize:13, display:"flex", justifyContent:"space-between", alignItems:"center" }}
-            onClick={()=>{setDropOpen(v=>!v);setSearch("");}}>
-            <span>Select member from list…</span>
-            <span style={{fontSize:11}}>{dropOpen?"▲":"▼"}</span>
-          </button>
-          {dropOpen && (
-            <div style={{ position:"absolute", top:"calc(100% + 6px)", left:0, right:0, zIndex:200, background:"#111827", border:"1.5px solid rgba(212,175,55,0.22)", borderRadius:14, boxShadow:"0 8px 32px rgba(0,0,0,0.6)", overflow:"hidden" }} className="pop-in">
-              <div style={{ padding:"10px 12px", borderBottom:"1px solid rgba(212,175,55,0.1)" }}>
-                <input autoFocus className="inp" placeholder="Search name or number…" value={search} onChange={e=>setSearch(e.target.value)} />
+      {/* Member list with checkboxes */}
+      <div className="card" style={{ margin:"0 20px", overflow:"hidden" }}>
+        {displayMembers.length === 0 ? (
+          <div style={{ padding:30, textAlign:"center", color:C.textLight, fontSize:14 }}>
+            {members.length===0 ? "No members in this group yet." : "No members match your filter."}
+          </div>
+        ) : displayMembers.map(m => {
+          const isArrived = arrivedIds.has(m.id);
+          return (
+            <div key={m.id} className="member-row" style={{ background: isArrived ? "rgba(45,106,79,0.06)" : "transparent" }}
+              onClick={()=>toggle(m.id)}>
+              {/* Checkbox */}
+              <div className={`checkbox-custom ${isArrived?"checked":""}`}>
+                {isArrived && <span style={{ color:"#fff", fontSize:14, fontWeight:700 }}>✓</span>}
               </div>
-              <div style={{ maxHeight:230, overflowY:"auto" }}>
-                {filtered.length===0 && <p style={{ textAlign:"center", color:"#4a4030", fontSize:13, padding:14 }}>No results</p>}
-                {filtered.map(m=>{
-                  const done = arrivedIds.has(m.id);
-                  return (
-                    <div key={m.id} onClick={()=>!done&&(markArrived(m),setDropOpen(false),setSearch(""))}
-                      style={{ display:"flex", alignItems:"center", gap:10, padding:"10px 14px", cursor:done?"not-allowed":"pointer", background:done?"rgba(34,197,94,0.07)":"transparent", borderBottom:"1px solid rgba(255,255,255,0.03)", opacity:done?0.5:1 }}
-                      className={done?"":"row-hover"}>
-                      <span style={{ minWidth:26, fontSize:11, fontWeight:700, color:"#d4af37", background:"rgba(212,175,55,0.1)", padding:"2px 6px", borderRadius:6 }}>{m.id}</span>
-                      <span style={{ fontSize:13, color:"#e8dfc8", flex:1 }}>{m.name}</span>
-                      {done && <span style={{color:"#4ade80",fontSize:13}}>✓</span>}
-                    </div>
-                  );
-                })}
-              </div>
+              {/* ID badge */}
+              <span style={{ width:32, height:32, borderRadius:8, background:isArrived?C.green:C.goldPale, display:"flex", alignItems:"center", justifyContent:"center", fontSize:12, fontWeight:700, color:isArrived?"#fff":C.brown, flexShrink:0, transition:"all 0.2s" }}>{m.id}</span>
+              {/* Name */}
+              <span style={{ flex:1, fontSize:14, color:isArrived?C.green:C.text, fontWeight:isArrived?600:400, transition:"all 0.2s" }}>{m.name}</span>
+              {/* Status */}
+              {isArrived && <span style={{ fontSize:11, color:C.greenLight, fontWeight:600 }}>Present</span>}
             </div>
-          )}
-        </div>
+          );
+        })}
       </div>
 
-      {/* Arrived */}
-      {arrived.length>0 && (
-        <div style={{ marginBottom:16 }}>
-          <p style={{ margin:"0 0 9px", fontSize:11, color:"#4ade80", textTransform:"uppercase", letterSpacing:1.5, fontWeight:700 }}>✅ Arrived ({arrived.length})</p>
-          <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
-            {arrived.map(m=>(
-              <div key={m.id} style={{ display:"flex", alignItems:"center", gap:10, background:flashId===m.id?"rgba(34,197,94,0.18)":"rgba(34,197,94,0.07)", border:"1px solid rgba(34,197,94,0.15)", borderRadius:10, padding:"9px 13px", transition:"background 0.3s" }}>
-                <span style={{ fontSize:11, fontWeight:700, color:"#4ade80", minWidth:22 }}>{m.id}</span>
-                <span style={{ fontSize:13, color:"#e8dfc8", flex:1 }}>{m.name}</span>
-                <button onClick={()=>unmark(m.id)} style={{ background:"none", border:"none", cursor:"pointer", color:"#4a4030", fontSize:15, padding:0 }}>✕</button>
-              </div>
-            ))}
-          </div>
+      {arrivedCount === total && total > 0 && (
+        <div style={{ margin:"20px 20px 0", background:`linear-gradient(135deg,${C.green},#1a4a35)`, borderRadius:16, padding:"20px", textAlign:"center", animation:"popIn 0.3s ease" }}>
+          <div style={{ fontSize:36 }}>🎉</div>
+          <p style={{ color:"#fff", fontWeight:700, fontSize:16, margin:"8px 0 4px" }}>Full Attendance!</p>
+          <p style={{ color:"rgba(255,255,255,0.7)", fontSize:13 }}>All {total} members are present. الحمد لله</p>
         </div>
       )}
 
-      {/* Remaining */}
-      {remaining.length>0 && (
-        <div>
-          <p style={{ margin:"0 0 9px", fontSize:11, color:"#f87171", textTransform:"uppercase", letterSpacing:1.5, fontWeight:700 }}>⏳ Remaining ({remaining.length})</p>
-          <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
-            {remaining.map(m=>(
-              <div key={m.id} onClick={()=>markArrived(m)} className="row-hover"
-                style={{ display:"flex", alignItems:"center", gap:10, background:"rgba(248,113,113,0.05)", border:"1px solid rgba(248,113,113,0.10)", borderRadius:10, padding:"9px 13px", cursor:"pointer" }}>
-                <span style={{ fontSize:11, fontWeight:700, color:"#f87171", minWidth:22 }}>{m.id}</span>
-                <span style={{ fontSize:13, color:"#e8dfc8", flex:1 }}>{m.name}</span>
-                <span style={{ fontSize:11, color:"#3a3028" }}>Tap →</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {arrivedIds.size===total && total>0 && (
-        <div style={{ textAlign:"center", padding:"28px 0 8px" }} className="pop-in">
-          <div style={{ fontSize:44 }}>🎉</div>
-          <p style={{ color:"#4ade80", fontSize:17, fontWeight:700, margin:"8px 0 4px" }}>Full Attendance!</p>
-          <p style={{ color:"#5a4e38", fontSize:12, margin:0 }}>All {total} members present.</p>
-        </div>
-      )}
+      <Footer />
     </div>
   );
 }
 
-/* ════════════════════════════════════════════════════════════════════════════
-   SHARED MINI COMPONENTS
-═══════════════════════════════════════════════════════════════════════════════*/
-function MiniStat({ label, value, color, icon }) {
+// ─── Reusable Components ──────────────────────────────────────────────────────
+function HajjHeader({ subtitle }) {
   return (
-    <div style={{ background:"rgba(255,255,255,0.04)", border:`1px solid ${color}22`, borderRadius:13, padding:"12px 8px", textAlign:"center" }}>
-      {icon && <div style={{ fontSize:18, marginBottom:3 }}>{icon}</div>}
-      <div style={{ fontSize:20, fontWeight:700, color, lineHeight:1 }}>{value}</div>
-      <div style={{ fontSize:10, color:"#4a4030", marginTop:3, letterSpacing:0.5 }}>{label}</div>
+    <div style={{ textAlign:"center", padding:"24px 0 28px" }}>
+      <div style={{ fontSize:52, marginBottom:8, filter:"drop-shadow(0 4px 12px rgba(184,134,11,0.3))" }}>🕌</div>
+      <h1 style={{ fontSize:26, fontWeight:700, color:C.brown, margin:0, fontFamily:"Amiri, Georgia, serif", letterSpacing:1 }}>Hajj Attendance</h1>
+      <p style={{ fontSize:12, color:C.textLight, letterSpacing:2, textTransform:"uppercase", marginTop:4 }}>{subtitle}</p>
+      <div style={{ display:"flex", justifyContent:"center", gap:6, marginTop:10, color:C.gold, fontSize:12 }}>
+        {"✦ ☽ ✦".split(" ").map((s,i)=><span key={i}>{s}</span>)}
+      </div>
     </div>
   );
 }
 
-function Toast({ msg, type }) {
-  const bg = type==="success"?"rgba(34,197,94,0.92)":type==="warn"?"rgba(234,179,8,0.92)":"rgba(220,38,38,0.92)";
+function TopBar({ title, onBack }) {
   return (
-    <div style={{ position:"fixed", top:16, left:"50%", transform:"translateX(-50%)", zIndex:9999, padding:"10px 22px", borderRadius:40, background:bg, color:"#fff", fontSize:13, fontWeight:600, boxShadow:"0 4px 24px rgba(0,0,0,0.4)", whiteSpace:"nowrap" }} className="pop-in">
-      {msg}
+    <div style={{ display:"flex", alignItems:"center", gap:12, padding:"16px 20px 12px", background:C.cardBg, borderBottom:`1px solid rgba(212,175,55,0.2)`, position:"sticky", top:0, zIndex:10, boxShadow:shadows.sm }}>
+      <button onClick={onBack} style={{ background:C.goldPale, border:"none", borderRadius:10, padding:"8px 14px", color:C.brown, cursor:"pointer", fontSize:14, fontWeight:700 }}>←</button>
+      <h2 style={{ margin:0, fontSize:18, fontWeight:700, color:C.brown }}>{title}</h2>
     </div>
   );
 }
+
+function StatPill({ label, value, icon, highlight }) {
+  return (
+    <div style={{ background:highlight?"rgba(255,255,255,0.25)":"rgba(255,255,255,0.15)", borderRadius:12, padding:"10px 8px", textAlign:"center" }}>
+      <div style={{ fontSize:18 }}>{icon}</div>
+      <div style={{ fontSize:20, fontWeight:700, color:"#fff", lineHeight:1.2 }}>{value}</div>
+      <div style={{ fontSize:10, color:"rgba(255,255,255,0.75)", marginTop:2, letterSpacing:0.5 }}>{label}</div>
+    </div>
+  );
+}
+
+function MenuCard({ icon, title, desc, color, onClick }) {
+  return (
+    <div onClick={onClick} style={{ background:C.cardBg, borderRadius:18, padding:"20px", display:"flex", alignItems:"center", gap:16, boxShadow:shadows.md, border:`1px solid rgba(212,175,55,0.2)`, cursor:"pointer", transition:"transform 0.15s, box-shadow 0.15s", active:{transform:"scale(0.98)"} }}
+      onTouchStart={e=>e.currentTarget.style.transform="scale(0.98)"}
+      onTouchEnd={e=>e.currentTarget.style.transform="scale(1)"}>
+      <div style={{ width:52, height:52, borderRadius:16, background:`linear-gradient(135deg,${color}22,${color}44)`, display:"flex", alignItems:"center", justifyContent:"center", fontSize:26, flexShrink:0 }}>{icon}</div>
+      <div style={{ flex:1 }}>
+        <p style={{ margin:0, fontSize:16, fontWeight:700, color:C.text }}>{title}</p>
+        <p style={{ margin:"3px 0 0", fontSize:12, color:C.textLight }}>{desc}</p>
+      </div>
+      <span style={{ fontSize:20, color:C.border }}>›</span>
+    </div>
+  );
+}
+
+function Footer() {
+  return (
+    <p style={{ textAlign:"center", fontSize:12, color:C.textLight, marginTop:32, padding:"0 20px", lineHeight:1.8 }}>
+      <span style={{ color:C.gold }}>✦</span> Made by <strong style={{ color:C.brown }}>Husain Dewaswala</strong> <span style={{ color:C.gold }}>✦</span>
+    </p>
+  );
+}
+
+const labelStyle = { display:"block", fontSize:13, fontWeight:600, color:C.textLight, marginBottom:6, letterSpacing:0.3 };
