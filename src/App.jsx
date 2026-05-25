@@ -1,21 +1,19 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef } from "react";
 import * as XLSX from "xlsx";
 
-// ─── CONSTANTS ────────────────────────────────────────────────────────────────
-const DB_KEY = "hajj_v3";
-const RADIUS_METERS = 300; // member must be within 300m of leader
+const DB_KEY = "hajj_v4";
+const RADIUS_METERS = 300;
 
 const C = {
   gold:"#B8860B", goldLight:"#D4AF37", goldPale:"#FBF0CC",
   green:"#2D6A4F", greenLight:"#52B788",
-  cream:"#FDF8EE", brown:"#5C3317", brownLight:"#8B5E3C",
+  brown:"#5C3317", brownLight:"#8B5E3C",
   red:"#C0392B", white:"#FFFFFF",
   text:"#2C1810", textLight:"#7A5C4A",
   border:"#D9C49A", cardBg:"#FFFEF7",
-  blue:"#1a73e8", bluePale:"#e8f0fe",
+  blue:"#1a73e8",
 };
 
-// ─── HUSAIN's 46 MEMBERS ─────────────────────────────────────────────────────
 const HUSAIN_MEMBERS = [
   {id:1,name:"M.Husain Dewaswala"},{id:2,name:"M.Husain Hakimji"},{id:3,name:"M.Murtaza Raswala"},
   {id:4,name:"Akberali Kota wala"},{id:5,name:"Firoz lokhandwala"},{id:6,name:"Akber Ali Dewaswala"},
@@ -35,18 +33,21 @@ const HUSAIN_MEMBERS = [
   {id:46,name:"Sakina bn nalawala"},
 ];
 
-// ─── DB HELPERS ───────────────────────────────────────────────────────────────
+// ── DB ────────────────────────────────────────────────────────────────────────
 function defaultDB() {
   return {
     leaders: {
-      husain_dewaswala: {
-        uid:"husain_dewaswala", displayName:"Husain Dewaswala",
-        password:"7865253", hizbName:"Husain Dewaswala",
-        members: HUSAIN_MEMBERS, events: [],
-        location: null, // {lat, lng, updatedAt}
+      53: {
+        hizbNo: 53,
+        displayName: "Husain Dewaswala",
+        password: "7865253",
+        members: HUSAIN_MEMBERS,
+        events: [],
+        location: null,
       }
     },
-    members: {} // keyed by hizbNo_slug
+    // members keyed by "hizbNo_memberIndex" e.g. "53_7"
+    memberAccounts: {}
   };
 }
 
@@ -56,21 +57,20 @@ function loadDB() {
     if (!raw) { const d = defaultDB(); saveDB(d); return d; }
     const db = JSON.parse(raw);
     if (!db.leaders) db.leaders = {};
-    if (!db.members) db.members = {};
-    // ensure Husain always exists
-    if (!db.leaders.husain_dewaswala) {
-      db.leaders.husain_dewaswala = defaultDB().leaders.husain_dewaswala;
+    if (!db.memberAccounts) db.memberAccounts = {};
+    // always ensure Husain
+    if (!db.leaders[53]) {
+      db.leaders[53] = defaultDB().leaders[53];
     } else {
-      db.leaders.husain_dewaswala.password = "7865253";
-      if (!db.leaders.husain_dewaswala.members?.length)
-        db.leaders.husain_dewaswala.members = HUSAIN_MEMBERS;
+      db.leaders[53].password = "7865253";
+      db.leaders[53].hizbNo = 53;
+      if (!db.leaders[53].members?.length) db.leaders[53].members = HUSAIN_MEMBERS;
     }
-    // deserialize event arrivedIds
+    // deserialize events
     Object.values(db.leaders).forEach(l => {
       (l.events||[]).forEach(ev => {
-        ev.arrivedIds = ev.arrivedIds || [];
-        ev.pendingIds = ev.pendingIds || [];
-        ev.memberAttendance = ev.memberAttendance || {}; // memberId -> {status,markedAt}
+        if (!ev.arrivedIds) ev.arrivedIds = [];
+        if (!ev.memberAttendance) ev.memberAttendance = {};
       });
     });
     return db;
@@ -82,12 +82,9 @@ function loadDB() {
 
 function saveDB(db) {
   try { localStorage.setItem(DB_KEY, JSON.stringify(db)); }
-  catch(e) { console.error("saveDB:",e); }
+  catch(e) { console.error(e); }
 }
 
-function slugify(s) {
-  return String(s).toLowerCase().trim().replace(/\s+/g,"_").replace(/[^a-z0-9_]/g,"");
-}
 function fmtDate(s) {
   if (!s) return "";
   try { return new Date(s).toLocaleDateString("en-IN",{day:"2-digit",month:"short",year:"numeric"}); }
@@ -98,46 +95,38 @@ function fmtTime(ts) {
   try { return new Date(ts).toLocaleTimeString("en-IN",{hour:"2-digit",minute:"2-digit"}); }
   catch(e) { return ""; }
 }
-
-// Haversine distance in meters
 function getDistance(lat1,lng1,lat2,lng2) {
-  const R = 6371000;
-  const dLat = (lat2-lat1)*Math.PI/180;
-  const dLng = (lng2-lng1)*Math.PI/180;
-  const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLng/2)**2;
-  return R * 2 * Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
+  const R=6371000, dLat=(lat2-lat1)*Math.PI/180, dLng=(lng2-lng1)*Math.PI/180;
+  const a=Math.sin(dLat/2)**2+Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLng/2)**2;
+  return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
 }
 
-// ─── TOAST ────────────────────────────────────────────────────────────────────
+// ── TOAST ─────────────────────────────────────────────────────────────────────
 function useToast() {
-  const [t,setT] = useState(null);
-  const show = (msg,type="ok") => { setT({msg,type}); setTimeout(()=>setT(null),2800); };
+  const [t,setT]=useState(null);
+  const show=(msg,type="ok")=>{ setT({msg,type}); setTimeout(()=>setT(null),2800); };
   return [t,show];
 }
 
-// ─── GLOBAL STYLES ────────────────────────────────────────────────────────────
 const GS = `
   @keyframes tin{from{opacity:0;transform:translateX(-50%) translateY(-12px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
   @keyframes fadeUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
   @keyframes pop{from{opacity:0;transform:scale(0.9)}to{opacity:1;transform:scale(1)}}
-  @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.5}}
-  @keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
-  @keyframes ripple{0%{transform:scale(0);opacity:0.6}100%{transform:scale(4);opacity:0}}
   .pg{animation:fadeUp 0.32s ease}
   .bp{background:linear-gradient(135deg,#B8860B,#D4AF37);color:#3a1f00;border:none;border-radius:14px;font-weight:700;cursor:pointer;font-family:Poppins,sans-serif;transition:all 0.15s;box-shadow:0 3px 12px rgba(184,134,11,0.28)}
-  .bp:active{transform:scale(0.96);opacity:0.88}
+  .bp:active{transform:scale(0.96)}
   .bg{background:linear-gradient(135deg,#2D6A4F,#52B788);color:#fff;border:none;border-radius:14px;font-weight:700;cursor:pointer;font-family:Poppins,sans-serif;transition:all 0.15s;box-shadow:0 3px 12px rgba(45,106,79,0.28)}
   .bg:active{transform:scale(0.96)}
   .bb{background:linear-gradient(135deg,#1a73e8,#4285f4);color:#fff;border:none;border-radius:14px;font-weight:700;cursor:pointer;font-family:Poppins,sans-serif;transition:all 0.15s;box-shadow:0 3px 12px rgba(26,115,232,0.28)}
   .bb:active{transform:scale(0.96)}
   .bs{background:#fff;color:#5C3317;border:2px solid #D9C49A;border-radius:14px;font-weight:600;cursor:pointer;font-family:Poppins,sans-serif;transition:all 0.15s}
   .bs:active{transform:scale(0.96)}
-  .bd{background:linear-gradient(135deg,#E74C3C,#C0392B);color:#fff;border:none;border-radius:10px;font-weight:600;cursor:pointer;font-family:Poppins,sans-serif;transition:all 0.15s}
+  .bd{background:linear-gradient(135deg,#E74C3C,#C0392B);color:#fff;border:none;border-radius:10px;font-weight:600;cursor:pointer;font-family:Poppins,sans-serif}
   .bd:active{transform:scale(0.96)}
   .inp{background:#fff;border:2px solid #D9C49A;border-radius:12px;padding:13px 16px;font-size:15px;color:#2C1810;font-family:Poppins,sans-serif;width:100%;box-sizing:border-box;-webkit-appearance:none;transition:border 0.2s}
   .inp:focus{outline:none;border-color:#B8860B;box-shadow:0 0 0 3px rgba(184,134,11,0.12)}
   .card{background:#FFFEF7;border-radius:20px;box-shadow:0 4px 16px rgba(107,58,42,0.12);border:1px solid rgba(212,175,55,0.18)}
-  .mr{display:flex;align-items:center;gap:12px;padding:13px 16px;border-bottom:1px solid rgba(212,175,55,0.13);transition:background 0.12s;-webkit-tap-highlight-color:rgba(0,0,0,0)}
+  .mr{display:flex;align-items:center;gap:12px;padding:13px 16px;border-bottom:1px solid rgba(212,175,55,0.13);transition:background 0.12s}
   .mr:last-child{border-bottom:none}
   .mr:active{background:rgba(212,175,55,0.08)}
   .chk{width:26px;height:26px;border-radius:8px;border:2.5px solid #D9C49A;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:all 0.18s;background:#fff}
@@ -147,123 +136,121 @@ const GS = `
   .sb input:focus{outline:none}
   .tb{padding:9px 10px;border-radius:18px;border:none;font-size:12px;font-weight:600;cursor:pointer;transition:all 0.15s;font-family:Poppins,sans-serif;flex:1}
   input[type=date]{color-scheme:light}
+  select.inp option{color:#2C1810;background:#fff}
   *{-webkit-tap-highlight-color:transparent;box-sizing:border-box}
-  select.inp{background-image:none}
 `;
 
-// ─── ROOT APP ─────────────────────────────────────────────────────────────────
+// ── ROOT ──────────────────────────────────────────────────────────────────────
 export default function App() {
   const [db, setDb] = useState(loadDB);
   const [session, setSession] = useState(() => {
-    try { return JSON.parse(sessionStorage.getItem("hajj_s3")||"null"); } catch(e){return null;}
+    try { return JSON.parse(sessionStorage.getItem("hajj_s4")||"null"); } catch(e){return null;}
   });
-  const [page, setPage] = useState(() => session ? (session.role==="leader"?"lHome":"mHome") : "entry");
+  const [page, setPage] = useState(()=>
+    session ? (session.role==="leader"?"lHome":"mHome") : "entry"
+  );
   const [activeEv, setActiveEv] = useState(null);
   const [toast, showToast] = useToast();
 
-  useEffect(() => { saveDB(db); }, [db]);
-
-  useEffect(() => {
-    try { sessionStorage.setItem("hajj_s3", JSON.stringify(session)); } catch(e){}
+  useEffect(()=>{ saveDB(db); },[db]);
+  useEffect(()=>{
+    try { sessionStorage.setItem("hajj_s4",JSON.stringify(session)); } catch(e){}
     if (!session) setPage("entry");
-    else setPage(session.role==="leader" ? "lHome" : "mHome");
-  }, [session]);
+    else setPage(session.role==="leader"?"lHome":"mHome");
+  },[session]);
 
-  // patchLeader
-  function patchLeader(uid, fn) {
-    setDb(prev => {
-      const updated = {...prev, leaders:{...prev.leaders,[uid]:fn(prev.leaders[uid])}};
-      saveDB(updated); return updated;
+  function patchLeader(hizbNo,fn) {
+    setDb(prev=>{
+      const u={...prev,leaders:{...prev.leaders,[hizbNo]:fn(prev.leaders[hizbNo])}};
+      saveDB(u); return u;
     });
   }
-  // patchMember
-  function patchMember(uid, fn) {
-    setDb(prev => {
-      const updated = {...prev, members:{...prev.members,[uid]:fn(prev.members[uid])}};
-      saveDB(updated); return updated;
+  function patchMemberAcc(key,fn) {
+    setDb(prev=>{
+      const u={...prev,memberAccounts:{...prev.memberAccounts,[key]:fn(prev.memberAccounts[key])}};
+      saveDB(u); return u;
     });
   }
 
-  const leader = session?.role==="leader" ? db.leaders[session.uid] : null;
-  const member = session?.role==="member" ? db.members[session.uid] : null;
+  const leader = session?.role==="leader" ? db.leaders[session.hizbNo] : null;
+  const memberAcc = session?.role==="member" ? db.memberAccounts[session.key] : null;
 
   // ── LEADER AUTH ──
-  function leaderRegister(displayName, password, hizbName) {
-    if (!displayName.trim()||!password||!hizbName.trim()){showToast("Fill all fields","err");return;}
+  function leaderRegister(hizbNo,name,password) {
+    const no=parseInt(hizbNo);
+    if (!no||!name.trim()||!password){showToast("Fill all fields","err");return;}
     if (password.length<4){showToast("Password min 4 chars","err");return;}
-    const uid = slugify(displayName);
-    if (db.leaders[uid]){showToast("Account exists","err");return;}
-    const nl = {uid,displayName:displayName.trim(),password,hizbName:hizbName.trim(),members:[],events:[],location:null};
-    setDb(prev=>{const u={...prev,leaders:{...prev.leaders,[uid]:nl}};saveDB(u);return u;});
-    setSession({role:"leader",uid});
-    showToast("Welcome, "+displayName+"!");
+    if (db.leaders[no]){showToast("Hizb #"+no+" already registered","err");return;}
+    const nl={hizbNo:no,displayName:name.trim(),password,members:[],events:[],location:null};
+    setDb(prev=>{const u={...prev,leaders:{...prev.leaders,[no]:nl}};saveDB(u);return u;});
+    setSession({role:"leader",hizbNo:no});
+    showToast("Welcome, "+name.trim()+"!");
   }
 
-  function leaderLogin(displayName, password, hizbName) {
-    const uid = slugify(displayName);
-    const l = db.leaders[uid];
-    if (!l){showToast("Leader not found","err");return;}
+  function leaderLogin(hizbNo,password) {
+    const no=parseInt(hizbNo);
+    const l=db.leaders[no];
+    if (!l){showToast("Hizb #"+no+" not found","err");return;}
     if (l.password!==password){showToast("Wrong password","err");return;}
-    if (l.hizbName.toLowerCase()!==hizbName.trim().toLowerCase()){showToast("Wrong Hizb name","err");return;}
-    setSession({role:"leader",uid});
+    setSession({role:"leader",hizbNo:no});
     showToast("Welcome back, "+l.displayName+"!");
   }
 
   // ── MEMBER AUTH ──
-  function memberRegister(hizbNo, name, password, leaderHizbName) {
-    if (!hizbNo||!name.trim()||!password||!leaderHizbName.trim()){showToast("Fill all fields","err");return;}
-    if (password.length<4){showToast("Password min 4 chars","err");return;}
-    // find leader by hizbName
-    const leaderEntry = Object.values(db.leaders).find(l=>l.hizbName.toLowerCase()===leaderHizbName.trim().toLowerCase());
-    if (!leaderEntry){showToast("Hizb not found. Check with your leader.","err");return;}
-    const uid = "m_"+slugify(leaderHizbName)+"_"+slugify(name);
-    if (db.members[uid]){showToast("Account exists","err");return;}
-    const nm = {uid,name:name.trim(),hizbNo:parseInt(hizbNo),password,leaderUid:leaderEntry.uid,leaderHizbName:leaderEntry.hizbName};
-    setDb(prev=>{const u={...prev,members:{...prev.members,[uid]:nm}};saveDB(u);return u;});
-    setSession({role:"member",uid});
-    showToast("Welcome, "+name.trim()+"!");
+  // Members register: hizbNo + memberName (selected from dropdown) + password
+  function memberRegister(hizbNo,memberName,password) {
+    const no=parseInt(hizbNo);
+    const l=db.leaders[no];
+    if (!l){showToast("Hizb #"+no+" not found","err");return;}
+    if (!memberName){showToast("Select your name","err");return;}
+    if (!password||password.length<4){showToast("Password min 4 chars","err");return;}
+    const key=no+"_"+memberName.toLowerCase().replace(/\s+/g,"_");
+    if (db.memberAccounts[key]){showToast("Account already exists for this name","err");return;}
+    const nm={key,hizbNo:no,memberName,leaderHizbNo:no,leaderName:l.displayName};
+    // find member id
+    const m=l.members.find(m=>m.name.toLowerCase()===memberName.toLowerCase());
+    if (m) nm.memberId=m.id;
+    nm.password=password;
+    setDb(prev=>{const u={...prev,memberAccounts:{...prev.memberAccounts,[key]:nm}};saveDB(u);return u;});
+    setSession({role:"member",key,hizbNo:no});
+    showToast("Welcome, "+memberName+"!");
   }
 
-  function memberLogin(hizbNo, name, password) {
-    // find by matching hizbNo + name slug
-    const slug = slugify(name);
-    const found = Object.values(db.members).find(m=>
-      m.hizbNo===parseInt(hizbNo) && slugify(m.name)===slug
-    );
-    if (!found){showToast("Member not found","err");return;}
-    if (found.password!==password){showToast("Wrong password","err");return;}
-    setSession({role:"member",uid:found.uid});
-    showToast("Welcome, "+found.name+"!");
+  function memberLogin(hizbNo,memberName,password) {
+    const no=parseInt(hizbNo);
+    const l=db.leaders[no];
+    if (!l){showToast("Hizb #"+no+" not found","err");return;}
+    if (!memberName){showToast("Select your name","err");return;}
+    const key=no+"_"+memberName.toLowerCase().replace(/\s+/g,"_");
+    const acc=db.memberAccounts[key];
+    if (!acc){showToast("No account found. Please register.","err");return;}
+    if (acc.password!==password){showToast("Wrong password","err");return;}
+    setSession({role:"member",key,hizbNo:no});
+    showToast("Welcome, "+memberName+"!");
   }
 
-  function logout() {
-    setSession(null);
-    setActiveEv(null);
-    setPage("entry");
+  function logout(){
+    setSession(null); setActiveEv(null);
   }
 
-  // ── LEADER: update location ──
-  function leaderShareLocation(uid, lat, lng) {
-    patchLeader(uid, l=>({...l, location:{lat,lng,updatedAt:Date.now()}}));
+  // ── LEADER OPS ──
+  function leaderShareLocation(lat,lng){
+    patchLeader(session.hizbNo,l=>({...l,location:{lat,lng,updatedAt:Date.now()}}));
   }
-
-  // ── LEADER: member management ──
-  function addMember(name, id) {
+  function addMember(name,id){
     const num=parseInt(id);
     if (!name.trim()||!num){showToast("Fill name and ID","err");return false;}
     const ms=leader.members||[];
-    if (ms.find(m=>m.id===num)){showToast("ID #"+num+" already exists","err");return false;}
-    if (ms.find(m=>m.name.toLowerCase()===name.toLowerCase())){showToast("Name already exists","err");return false;}
-    patchLeader(session.uid,l=>({...l,members:[...(l.members||[]),{id:num,name:name.trim()}].sort((a,b)=>a.id-b.id)}));
+    if (ms.find(m=>m.id===num)){showToast("ID #"+num+" exists","err");return false;}
+    if (ms.find(m=>m.name.toLowerCase()===name.toLowerCase())){showToast("Name exists","err");return false;}
+    patchLeader(session.hizbNo,l=>({...l,members:[...(l.members||[]),{id:num,name:name.trim()}].sort((a,b)=>a.id-b.id)}));
     showToast(name+" added!"); return true;
   }
-
-  function deleteMember(id) {
-    patchLeader(session.uid,l=>({...l,members:l.members.filter(m=>m.id!==id)}));
+  function deleteMember(id){
+    patchLeader(session.hizbNo,l=>({...l,members:l.members.filter(m=>m.id!==id)}));
     showToast("Member removed");
   }
-
-  function importExcel(file) {
+  function importExcel(file){
     const reader=new FileReader();
     reader.onload=e=>{
       try {
@@ -273,67 +260,51 @@ export default function App() {
         const existing=[...(leader.members||[])];
         let added=0,skipped=0;
         rows.forEach(row=>{
-          const id=parseInt(row[0]);const name=String(row[1]||"").trim();
+          const id=parseInt(row[0]),name=String(row[1]||"").trim();
           if (!id||!name){skipped++;return;}
           if (existing.find(m=>m.id===id||m.name.toLowerCase()===name.toLowerCase())){skipped++;return;}
-          existing.push({id,name});added++;
+          existing.push({id,name}); added++;
         });
         existing.sort((a,b)=>a.id-b.id);
-        patchLeader(session.uid,l=>({...l,members:existing}));
+        patchLeader(session.hizbNo,l=>({...l,members:existing}));
         showToast("Imported "+added+(skipped?", "+skipped+" skipped":""));
       } catch(err){showToast("Invalid file","err");}
     };
     reader.readAsBinaryString(file);
   }
-
-  // ── LEADER: events ──
-  function createEvent(name, date, location) {
+  function createEvent(name,date,loc){
     if (!name.trim()||!date){showToast("Fill name and date","err");return false;}
-    const ev={id:Date.now(),name:name.trim(),date,eventLocation:location||null,
-      arrivedIds:[],memberAttendance:{},createdAt:Date.now()};
-    patchLeader(session.uid,l=>({...l,events:[...(l.events||[]),ev]}));
+    const ev={id:Date.now(),name:name.trim(),date,eventLocation:loc||null,arrivedIds:[],memberAttendance:{},createdAt:Date.now()};
+    patchLeader(session.hizbNo,l=>({...l,events:[...(l.events||[]),ev]}));
     showToast("Event created!"); return true;
   }
-
-  function deleteEvent(id) {
-    patchLeader(session.uid,l=>({...l,events:l.events.filter(e=>e.id!==id)}));
+  function deleteEvent(id){
+    patchLeader(session.hizbNo,l=>({...l,events:l.events.filter(e=>e.id!==id)}));
     showToast("Event deleted");
   }
-
-  // ── LEADER: mark attendance (checkbox) ──
-  function leaderToggleAttendance(evId, memberId) {
-    patchLeader(session.uid,l=>({
-      ...l, events:l.events.map(ev=>{
+  function leaderToggle(evId,memberId){
+    patchLeader(session.hizbNo,l=>({
+      ...l,events:l.events.map(ev=>{
         if (ev.id!==evId) return ev;
         const arr=[...(ev.arrivedIds||[])];
         const idx=arr.indexOf(memberId);
         if (idx>=0) arr.splice(idx,1); else arr.push(memberId);
-        // update memberAttendance
-        const ma={...(ev.memberAttendance||{})};
-        if (idx>=0) delete ma[memberId];
-        else ma[memberId]={status:"leader_marked",markedAt:Date.now()};
-        return {...ev,arrivedIds:arr,memberAttendance:ma};
+        return {...ev,arrivedIds:arr};
       })
     }));
   }
 
-  function leaderSaveAttendance(evId, arrivedIds) {
-    patchLeader(session.uid,l=>({
-      ...l,events:l.events.map(ev=>ev.id!==evId?ev:{...ev,arrivedIds:[...arrivedIds]})
-    }));
-  }
-
-  // ── MEMBER: self-mark attendance ──
-  function memberMarkAttendance(leaderUid, evId, memberName, hizbNo) {
-    patchLeader(leaderUid, l=>({
-      ...l, events:l.events.map(ev=>{
+  // ── MEMBER OPS ──
+  function memberMarkAttendance(evId){
+    const acc=memberAcc;
+    const no=acc.leaderHizbNo;
+    patchLeader(no,l=>({
+      ...l,events:l.events.map(ev=>{
         if (ev.id!==evId) return ev;
-        const key=String(hizbNo)+"_"+slugify(memberName);
-        const ma={...(ev.memberAttendance||{}),[key]:{status:"self_marked",name:memberName,hizbNo,markedAt:Date.now()}};
-        // also add to arrivedIds if member exists in leader's list
-        const lMember=l.members.find(m=>m.id===hizbNo);
+        const key=acc.key;
+        const ma={...(ev.memberAttendance||{}),[key]:{status:"self_marked",name:acc.memberName,memberId:acc.memberId,markedAt:Date.now()}};
         const arr=[...(ev.arrivedIds||[])];
-        if (lMember && !arr.includes(lMember.id)) arr.push(lMember.id);
+        if (acc.memberId && !arr.includes(acc.memberId)) arr.push(acc.memberId);
         return {...ev,arrivedIds:arr,memberAttendance:ma};
       })
     }));
@@ -346,43 +317,46 @@ export default function App() {
         <div style={{position:"fixed",top:14,left:"50%",transform:"translateX(-50%)",zIndex:9999,
           padding:"11px 22px",borderRadius:50,whiteSpace:"nowrap",maxWidth:"88vw",textAlign:"center",
           background:toast.type==="err"?"#C0392B":toast.type==="warn"?"#E67E22":"#2D6A4F",
-          color:"#fff",fontSize:13,fontWeight:600,boxShadow:"0 4px 24px rgba(0,0,0,0.2)",
-          animation:"tin 0.3s ease"}}>
+          color:"#fff",fontSize:13,fontWeight:600,boxShadow:"0 4px 24px rgba(0,0,0,0.2)",animation:"tin 0.3s ease"}}>
           {toast.msg}
         </div>
       )}
       <style>{GS}</style>
 
-      {page==="entry"   && <EntryPage setPage={setPage}/>}
-      {page==="lLogin"  && <LeaderLogin  onLogin={leaderLogin}  onReg={()=>setPage("lReg")}  onBack={()=>setPage("entry")}/>}
-      {page==="lReg"    && <LeaderReg    onReg={leaderRegister} onLogin={()=>setPage("lLogin")} onBack={()=>setPage("entry")}/>}
-      {page==="mLogin"  && <MemberLogin  onLogin={memberLogin}  onReg={()=>setPage("mReg")}  onBack={()=>setPage("entry")}/>}
-      {page==="mReg"    && <MemberReg    onReg={memberRegister} onLogin={()=>setPage("mLogin")} onBack={()=>setPage("entry")}/>}
+      {page==="entry"  && <EntryPage setPage={setPage}/>}
+      {page==="lLogin" && <LeaderLogin  onLogin={leaderLogin}  onReg={()=>setPage("lReg")}   onBack={()=>setPage("entry")}/>}
+      {page==="lReg"   && <LeaderReg    onReg={leaderRegister} onLogin={()=>setPage("lLogin")} onBack={()=>setPage("entry")}/>}
+      {page==="mLogin" && <MemberLogin  db={db} onLogin={memberLogin}  onReg={()=>setPage("mReg")}   onBack={()=>setPage("entry")}/>}
+      {page==="mReg"   && <MemberReg    db={db} onReg={memberRegister} onLogin={()=>setPage("mLogin")} onBack={()=>setPage("entry")}/>}
 
-      {/* LEADER PAGES */}
-      {page==="lHome"   && leader && <LeaderHome leader={leader} db={db} nav={setPage} logout={logout} onShareLoc={(lat,lng)=>leaderShareLocation(session.uid,lat,lng)} showToast={showToast}/>}
-      {page==="lMembers"&& leader && <MembersPage leader={leader} nav={setPage} onDelete={deleteMember} onImport={importExcel} showToast={showToast}/>}
-      {page==="lAddMem" && leader && <AddMemPage  leader={leader} nav={setPage} onAdd={addMember}/>}
-      {page==="lEvents" && leader && (
+      {page==="lHome"    && leader && <LeaderHome leader={leader} nav={setPage} logout={logout} onShareLoc={leaderShareLocation} showToast={showToast}/>}
+      {page==="lMembers" && leader && <MembersPage leader={leader} nav={setPage} onDelete={deleteMember} onImport={importExcel}/>}
+      {page==="lAddMem"  && leader && <AddMemPage  leader={leader} nav={setPage} onAdd={addMember}/>}
+      {page==="lEvents"  && leader && (
         <LeaderEventsPage leader={leader} nav={setPage} onCreate={createEvent} onDelete={deleteEvent}
           onOpen={ev=>{setActiveEv(ev);setPage("lAttend");}} showToast={showToast}/>
       )}
       {page==="lAttend" && leader && activeEv && (
-        <LeaderAttendPage leader={leader} ev={leader.events.find(e=>e.id===activeEv.id)||activeEv}
-          onToggle={(mid)=>leaderToggleAttendance(activeEv.id,mid)}
-          onBack={()=>{setActiveEv(null);setPage("lEvents");}} showToast={showToast}/>
+        <LeaderAttendPage
+          leader={leader}
+          ev={leader.events.find(e=>e.id===activeEv.id)||activeEv}
+          onToggle={(mid)=>leaderToggle(activeEv.id,mid)}
+          onBack={()=>{setActiveEv(null);setPage("lEvents");}}
+          showToast={showToast}/>
       )}
-
-      {/* MEMBER PAGES */}
-      {page==="mHome" && member && (
-        <MemberHome member={member} db={db} nav={setPage} logout={logout} showToast={showToast}
-          onMarkAttendance={memberMarkAttendance}/>
+      {page==="mHome" && memberAcc && (
+        <MemberHome
+          acc={memberAcc}
+          db={db}
+          logout={logout}
+          showToast={showToast}
+          onMark={memberMarkAttendance}/>
       )}
     </div>
   );
 }
 
-// ─── ENTRY PAGE ───────────────────────────────────────────────────────────────
+// ─── ENTRY ────────────────────────────────────────────────────────────────────
 function EntryPage({setPage}) {
   return (
     <div className="pg" style={{maxWidth:400,margin:"0 auto",padding:"30px 18px 40px"}}>
@@ -390,33 +364,27 @@ function EntryPage({setPage}) {
         <div style={{fontSize:56,marginBottom:8,filter:"drop-shadow(0 4px 12px rgba(184,134,11,0.3))"}}>🕌</div>
         <h1 style={{fontSize:26,fontWeight:700,color:C.brown,margin:0}}>Hajj Attendance</h1>
         <p style={{fontSize:12,color:C.textLight,letterSpacing:2,textTransform:"uppercase",marginTop:4}}>Group Leader System</p>
-        <p style={{fontSize:14,color:C.gold,marginTop:8,letterSpacing:1}}>✦ ☽ ✦</p>
+        <p style={{fontSize:14,color:C.gold,marginTop:8}}>✦ ☽ ✦</p>
       </div>
-
-      <p style={{textAlign:"center",fontSize:13,color:C.textLight,marginBottom:20,fontWeight:600,letterSpacing:1,textTransform:"uppercase"}}>I am a…</p>
-
+      <p style={{textAlign:"center",fontSize:12,fontWeight:700,color:C.textLight,letterSpacing:1.5,textTransform:"uppercase",marginBottom:18}}>I am a…</p>
       <div style={{display:"flex",flexDirection:"column",gap:16}}>
-        <div onClick={()=>setPage("lLogin")} style={{background:"linear-gradient(135deg,#2D6A4F,#1a4a35)",borderRadius:22,padding:"24px 22px",cursor:"pointer",boxShadow:"0 6px 24px rgba(45,106,79,0.35)",display:"flex",alignItems:"center",gap:18,transition:"transform 0.15s"}}
-          onTouchStart={e=>e.currentTarget.style.transform="scale(0.97)"}
-          onTouchEnd={e=>e.currentTarget.style.transform="scale(1)"}>
-          <div style={{fontSize:40}}>👑</div>
-          <div>
-            <p style={{margin:0,fontSize:18,fontWeight:700,color:"#fff"}}>Group Leader</p>
-            <p style={{margin:"4px 0 0",fontSize:12,color:"rgba(255,255,255,0.7)"}}>Manage your Hizb group & events</p>
+        {[
+          {icon:"👑",title:"Group Leader",sub:"Manage your Hizb group & events",col:"#2D6A4F",colEnd:"#1a4a35",pg:"lLogin"},
+          {icon:"🤲",title:"Group Member",sub:"Mark attendance & find your group",col:"#B8860B",colEnd:"#8B6914",pg:"mLogin"},
+        ].map(item=>(
+          <div key={item.pg} onClick={()=>setPage(item.pg)}
+            onTouchStart={e=>e.currentTarget.style.transform="scale(0.97)"}
+            onTouchEnd={e=>e.currentTarget.style.transform="scale(1)"}
+            style={{background:`linear-gradient(135deg,${item.col},${item.colEnd})`,borderRadius:22,padding:"24px 22px",cursor:"pointer",
+              boxShadow:`0 6px 24px ${item.col}55`,display:"flex",alignItems:"center",gap:18,transition:"transform 0.15s"}}>
+            <div style={{fontSize:40}}>{item.icon}</div>
+            <div>
+              <p style={{margin:0,fontSize:18,fontWeight:700,color:"#fff"}}>{item.title}</p>
+              <p style={{margin:"4px 0 0",fontSize:12,color:"rgba(255,255,255,0.72)"}}>{item.sub}</p>
+            </div>
+            <span style={{marginLeft:"auto",fontSize:24,color:"rgba(255,255,255,0.45)"}}>›</span>
           </div>
-          <span style={{marginLeft:"auto",fontSize:22,color:"rgba(255,255,255,0.5)"}}>›</span>
-        </div>
-
-        <div onClick={()=>setPage("mLogin")} style={{background:"linear-gradient(135deg,#B8860B,#D4AF37)",borderRadius:22,padding:"24px 22px",cursor:"pointer",boxShadow:"0 6px 24px rgba(184,134,11,0.35)",display:"flex",alignItems:"center",gap:18,transition:"transform 0.15s"}}
-          onTouchStart={e=>e.currentTarget.style.transform="scale(0.97)"}
-          onTouchEnd={e=>e.currentTarget.style.transform="scale(1)"}>
-          <div style={{fontSize:40}}>🤲</div>
-          <div>
-            <p style={{margin:0,fontSize:18,fontWeight:700,color:C.brown}}>Group Member</p>
-            <p style={{margin:"4px 0 0",fontSize:12,color:"rgba(92,51,23,0.7)"}}>Mark attendance & find your group</p>
-          </div>
-          <span style={{marginLeft:"auto",fontSize:22,color:"rgba(92,51,23,0.4)"}}>›</span>
-        </div>
+        ))}
       </div>
       <Footer/>
     </div>
@@ -425,26 +393,24 @@ function EntryPage({setPage}) {
 
 // ─── LEADER LOGIN ─────────────────────────────────────────────────────────────
 function LeaderLogin({onLogin,onReg,onBack}) {
-  const [name,setName]=useState("");const [pass,setPass]=useState("");
-  const [hizb,setHizb]=useState("");const [show,setShow]=useState(false);
+  const [no,setNo]=useState("");const [pass,setPass]=useState("");const [show,setShow]=useState(false);
   return (
-    <div className="pg" style={{maxWidth:400,margin:"0 auto",padding:"20px 18px 40px"}}>
+    <div className="pg" style={{maxWidth:400,margin:"0 auto",padding:"0 0 40px"}}>
       <Bar title="Leader Sign In" back={onBack}/>
-      <div style={{padding:"20px 0"}}>
-        <div style={{textAlign:"center",fontSize:40,marginBottom:16}}>👑</div>
-        <div className="card" style={{padding:24,marginBottom:16}}>
-          <Lbl>Full Name</Lbl>
-          <input className="inp" style={{marginBottom:12}} placeholder="e.g. Husain Dewaswala" value={name} onChange={e=>setName(e.target.value)}/>
-          <Lbl>Hizb Name</Lbl>
-          <input className="inp" style={{marginBottom:12}} placeholder="Your Hizb name" value={hizb} onChange={e=>setHizb(e.target.value)}/>
+      <div style={{padding:"24px 18px 0"}}>
+        <div style={{textAlign:"center",fontSize:44,marginBottom:18}}>👑</div>
+        <div className="card" style={{padding:24,marginBottom:18}}>
+          <Lbl>Hizb Number</Lbl>
+          <input className="inp" type="number" style={{marginBottom:14}} placeholder="e.g. 53" value={no} onChange={e=>setNo(e.target.value)}/>
           <Lbl>Password</Lbl>
-          <div style={{position:"relative",marginBottom:22}}>
-            <input className="inp" type={show?"text":"password"} style={{paddingRight:48}} placeholder="Password" value={pass} onChange={e=>setPass(e.target.value)} onKeyDown={e=>e.key==="Enter"&&onLogin(name,pass,hizb)}/>
+          <div style={{position:"relative",marginBottom:24}}>
+            <input className="inp" type={show?"text":"password"} style={{paddingRight:48}} placeholder="Your password"
+              value={pass} onChange={e=>setPass(e.target.value)} onKeyDown={e=>e.key==="Enter"&&onLogin(no,pass)}/>
             <button onClick={()=>setShow(v=>!v)} style={{position:"absolute",right:14,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",cursor:"pointer",fontSize:17,color:C.textLight}}>{show?"🙈":"👁"}</button>
           </div>
-          <button className="bg" style={{width:"100%",padding:"15px 0",fontSize:15}} onClick={()=>onLogin(name,pass,hizb)}>Sign In as Leader</button>
+          <button className="bg" style={{width:"100%",padding:"15px 0",fontSize:15}} onClick={()=>onLogin(no,pass)}>Sign In as Leader</button>
         </div>
-        <p style={{textAlign:"center",fontSize:14,color:C.textLight}}>New leader? <span onClick={onReg} style={{color:C.gold,fontWeight:700,cursor:"pointer"}}>Create Account</span></p>
+        <p style={{textAlign:"center",fontSize:14,color:C.textLight}}>New leader? <span onClick={onReg} style={{color:C.gold,fontWeight:700,cursor:"pointer"}}>Register</span></p>
       </div>
       <Footer/>
     </div>
@@ -453,31 +419,33 @@ function LeaderLogin({onLogin,onReg,onBack}) {
 
 // ─── LEADER REGISTER ──────────────────────────────────────────────────────────
 function LeaderReg({onReg,onLogin,onBack}) {
-  const [name,setName]=useState("");const [hizb,setHizb]=useState("");
+  const [no,setNo]=useState("");const [name,setName]=useState("");
   const [pass,setPass]=useState("");const [conf,setConf]=useState("");const [show,setShow]=useState(false);
   function submit(){
-    if (!name.trim()||!hizb.trim()||!pass){alert("Fill all fields");return;}
+    if (!no||!name.trim()||!pass){alert("Fill all fields");return;}
     if (pass.length<4){alert("Password min 4 characters");return;}
     if (pass!==conf){alert("Passwords do not match");return;}
-    onReg(name.trim(),pass,hizb.trim());
+    onReg(no,name.trim(),pass);
   }
   return (
-    <div className="pg" style={{maxWidth:400,margin:"0 auto",padding:"20px 18px 40px"}}>
+    <div className="pg" style={{maxWidth:400,margin:"0 auto",padding:"0 0 40px"}}>
       <Bar title="Leader Registration" back={onBack}/>
-      <div style={{padding:"20px 0"}}>
-        <div style={{textAlign:"center",fontSize:40,marginBottom:16}}>👑</div>
-        <div className="card" style={{padding:24,marginBottom:16}}>
+      <div style={{padding:"24px 18px 0"}}>
+        <div style={{textAlign:"center",fontSize:44,marginBottom:18}}>👑</div>
+        <div className="card" style={{padding:24,marginBottom:18}}>
+          <Lbl>Hizb Number</Lbl>
+          <input className="inp" type="number" style={{marginBottom:14}} placeholder="Your assigned Hizb number" value={no} onChange={e=>setNo(e.target.value)}/>
           <Lbl>Your Full Name</Lbl>
-          <input className="inp" style={{marginBottom:12}} placeholder="e.g. Husain Dewaswala" value={name} onChange={e=>setName(e.target.value)}/>
-          <Lbl>Hizb Name</Lbl>
-          <input className="inp" style={{marginBottom:12}} placeholder="e.g. Husain Dewaswala Group" value={hizb} onChange={e=>setHizb(e.target.value)}/>
+          <input className="inp" style={{marginBottom:14}} placeholder="e.g. Ahmed Ali" value={name} onChange={e=>setName(e.target.value)}/>
           <Lbl>Password</Lbl>
-          <div style={{position:"relative",marginBottom:12}}>
-            <input className="inp" type={show?"text":"password"} style={{paddingRight:48}} placeholder="Create password" value={pass} onChange={e=>setPass(e.target.value)}/>
+          <div style={{position:"relative",marginBottom:14}}>
+            <input className="inp" type={show?"text":"password"} style={{paddingRight:48}} placeholder="Min 4 characters"
+              value={pass} onChange={e=>setPass(e.target.value)}/>
             <button onClick={()=>setShow(v=>!v)} style={{position:"absolute",right:14,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",cursor:"pointer",fontSize:17,color:C.textLight}}>{show?"🙈":"👁"}</button>
           </div>
           <Lbl>Confirm Password</Lbl>
-          <input className="inp" type="password" style={{marginBottom:22}} placeholder="Re-enter password" value={conf} onChange={e=>setConf(e.target.value)} onKeyDown={e=>e.key==="Enter"&&submit()}/>
+          <input className="inp" type="password" style={{marginBottom:24}} placeholder="Re-enter password"
+            value={conf} onChange={e=>setConf(e.target.value)} onKeyDown={e=>e.key==="Enter"&&submit()}/>
           <button className="bg" style={{width:"100%",padding:"15px 0",fontSize:15}} onClick={submit}>Create Leader Account</button>
         </div>
         <p style={{textAlign:"center",fontSize:14,color:C.textLight}}>Already registered? <span onClick={onLogin} style={{color:C.gold,fontWeight:700,cursor:"pointer"}}>Sign In</span></p>
@@ -488,25 +456,58 @@ function LeaderReg({onReg,onLogin,onBack}) {
 }
 
 // ─── MEMBER LOGIN ─────────────────────────────────────────────────────────────
-function MemberLogin({onLogin,onReg,onBack}) {
-  const [no,setNo]=useState("");const [name,setName]=useState("");
-  const [pass,setPass]=useState("");const [show,setShow]=useState(false);
+function MemberLogin({db,onLogin,onReg,onBack}) {
+  const [no,setNo]=useState("");
+  const [selName,setSelName]=useState("");
+  const [pass,setPass]=useState("");
+  const [show,setShow]=useState(false);
+
+  const leader=no&&db.leaders[parseInt(no)];
+  const memberList=leader?(leader.members||[]):[];
+
+  // reset name when hizb changes
+  useEffect(()=>setSelName(""),[no]);
+
   return (
-    <div className="pg" style={{maxWidth:400,margin:"0 auto",padding:"20px 18px 40px"}}>
+    <div className="pg" style={{maxWidth:400,margin:"0 auto",padding:"0 0 40px"}}>
       <Bar title="Member Sign In" back={onBack}/>
-      <div style={{padding:"20px 0"}}>
-        <div style={{textAlign:"center",fontSize:40,marginBottom:16}}>🤲</div>
-        <div className="card" style={{padding:24,marginBottom:16}}>
-          <Lbl>Your Hizb Number</Lbl>
-          <input className="inp" style={{marginBottom:12}} type="number" placeholder="e.g. 7" value={no} onChange={e=>setNo(e.target.value)}/>
-          <Lbl>Your Full Name</Lbl>
-          <input className="inp" style={{marginBottom:12}} placeholder="e.g. Ahmed Ali" value={name} onChange={e=>setName(e.target.value)}/>
+      <div style={{padding:"24px 18px 0"}}>
+        <div style={{textAlign:"center",fontSize:44,marginBottom:18}}>🤲</div>
+        <div className="card" style={{padding:24,marginBottom:18}}>
+          <Lbl>Hizb Number</Lbl>
+          <input className="inp" type="number" style={{marginBottom:14}} placeholder="Your leader's Hizb number"
+            value={no} onChange={e=>setNo(e.target.value)}/>
+
+          {no&&!leader&&(
+            <div style={{background:"rgba(192,57,43,0.08)",border:"1px solid rgba(192,57,43,0.25)",borderRadius:10,padding:"10px 14px",marginBottom:14,fontSize:13,color:C.red}}>
+              ❌ Hizb #{no} not found. Check the number with your leader.
+            </div>
+          )}
+
+          {leader&&(
+            <>
+              <div style={{background:"rgba(45,106,79,0.08)",border:"1px solid rgba(45,106,79,0.2)",borderRadius:10,padding:"10px 14px",marginBottom:14,fontSize:13,color:C.green}}>
+                ✅ Hizb #{no} — {leader.displayName}
+              </div>
+              <Lbl>Select Your Name</Lbl>
+              <select className="inp" style={{marginBottom:14}} value={selName} onChange={e=>setSelName(e.target.value)}>
+                <option value="">— Select your name —</option>
+                {memberList.map(m=>(
+                  <option key={m.id} value={m.name}>#{m.id} · {m.name}</option>
+                ))}
+              </select>
+            </>
+          )}
+
           <Lbl>Password</Lbl>
-          <div style={{position:"relative",marginBottom:22}}>
-            <input className="inp" type={show?"text":"password"} style={{paddingRight:48}} placeholder="Your password" value={pass} onChange={e=>setPass(e.target.value)} onKeyDown={e=>e.key==="Enter"&&onLogin(no,name,pass)}/>
+          <div style={{position:"relative",marginBottom:24}}>
+            <input className="inp" type={show?"text":"password"} style={{paddingRight:48}} placeholder="Your password"
+              value={pass} onChange={e=>setPass(e.target.value)} onKeyDown={e=>e.key==="Enter"&&onLogin(no,selName,pass)}/>
             <button onClick={()=>setShow(v=>!v)} style={{position:"absolute",right:14,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",cursor:"pointer",fontSize:17,color:C.textLight}}>{show?"🙈":"👁"}</button>
           </div>
-          <button className="bp" style={{width:"100%",padding:"15px 0",fontSize:15}} onClick={()=>onLogin(no,name,pass)}>Sign In as Member</button>
+          <button className="bp" style={{width:"100%",padding:"15px 0",fontSize:15}} onClick={()=>onLogin(no,selName,pass)}>
+            Sign In as Member
+          </button>
         </div>
         <p style={{textAlign:"center",fontSize:14,color:C.textLight}}>New member? <span onClick={onReg} style={{color:C.gold,fontWeight:700,cursor:"pointer"}}>Register</span></p>
       </div>
@@ -516,36 +517,76 @@ function MemberLogin({onLogin,onReg,onBack}) {
 }
 
 // ─── MEMBER REGISTER ──────────────────────────────────────────────────────────
-function MemberReg({onReg,onLogin,onBack}) {
-  const [no,setNo]=useState("");const [name,setName]=useState("");
-  const [hizb,setHizb]=useState("");const [pass,setPass]=useState("");
-  const [conf,setConf]=useState("");const [show,setShow]=useState(false);
+function MemberReg({db,onReg,onLogin,onBack}) {
+  const [no,setNo]=useState("");
+  const [selName,setSelName]=useState("");
+  const [pass,setPass]=useState("");
+  const [conf,setConf]=useState("");
+  const [show,setShow]=useState(false);
+
+  const leader=no&&db.leaders[parseInt(no)];
+  const memberList=leader?(leader.members||[]):[];
+
+  useEffect(()=>setSelName(""),[no]);
+
   function submit(){
-    if (!no||!name.trim()||!hizb.trim()||!pass){alert("Fill all fields");return;}
+    if (!no||!selName||!pass){alert("Fill all fields and select your name");return;}
     if (pass.length<4){alert("Password min 4 characters");return;}
     if (pass!==conf){alert("Passwords do not match");return;}
-    onReg(no,name.trim(),pass,hizb.trim());
+    onReg(no,selName,pass);
   }
+
   return (
-    <div className="pg" style={{maxWidth:400,margin:"0 auto",padding:"20px 18px 40px"}}>
+    <div className="pg" style={{maxWidth:400,margin:"0 auto",padding:"0 0 40px"}}>
       <Bar title="Member Registration" back={onBack}/>
-      <div style={{padding:"20px 0"}}>
-        <div style={{textAlign:"center",fontSize:40,marginBottom:16}}>🤲</div>
-        <div className="card" style={{padding:24,marginBottom:16}}>
-          <Lbl>Your Hizb Number (assigned by leader)</Lbl>
-          <input className="inp" style={{marginBottom:12}} type="number" placeholder="e.g. 7" value={no} onChange={e=>setNo(e.target.value)}/>
-          <Lbl>Your Full Name</Lbl>
-          <input className="inp" style={{marginBottom:12}} placeholder="As given by leader" value={name} onChange={e=>setName(e.target.value)}/>
-          <Lbl>Your Leader's Hizb Name</Lbl>
-          <input className="inp" style={{marginBottom:12}} placeholder="Get this from your leader" value={hizb} onChange={e=>setHizb(e.target.value)}/>
+      <div style={{padding:"24px 18px 0"}}>
+        <div style={{textAlign:"center",fontSize:44,marginBottom:18}}>🤲</div>
+        <div className="card" style={{padding:24,marginBottom:18}}>
+
+          <Lbl>Hizb Number (given by your leader)</Lbl>
+          <input className="inp" type="number" style={{marginBottom:14}} placeholder="e.g. 53"
+            value={no} onChange={e=>setNo(e.target.value)}/>
+
+          {no&&!leader&&(
+            <div style={{background:"rgba(192,57,43,0.08)",border:"1px solid rgba(192,57,43,0.25)",borderRadius:10,padding:"10px 14px",marginBottom:14,fontSize:13,color:C.red}}>
+              ❌ Hizb #{no} not found. Ask your leader for the correct number.
+            </div>
+          )}
+
+          {leader&&(
+            <>
+              <div style={{background:"rgba(45,106,79,0.08)",border:"1px solid rgba(45,106,79,0.2)",borderRadius:10,padding:"10px 14px",marginBottom:14,fontSize:13,color:C.green}}>
+                ✅ Hizb #{no} — Leader: {leader.displayName}
+              </div>
+              <Lbl>Select Your Name</Lbl>
+              {memberList.length===0?(
+                <div style={{background:"rgba(230,126,22,0.08)",border:"1px solid rgba(230,126,22,0.25)",borderRadius:10,padding:"10px 14px",marginBottom:14,fontSize:13,color:"#E67E22"}}>
+                  ⚠️ No members added yet. Ask your leader to add members first.
+                </div>
+              ):(
+                <select className="inp" style={{marginBottom:14}} value={selName} onChange={e=>setSelName(e.target.value)}>
+                  <option value="">— Select your name —</option>
+                  {memberList.map(m=>(
+                    <option key={m.id} value={m.name}>#{m.id} · {m.name}</option>
+                  ))}
+                </select>
+              )}
+            </>
+          )}
+
           <Lbl>Create Password</Lbl>
-          <div style={{position:"relative",marginBottom:12}}>
-            <input className="inp" type={show?"text":"password"} style={{paddingRight:48}} placeholder="Min 4 characters" value={pass} onChange={e=>setPass(e.target.value)}/>
+          <div style={{position:"relative",marginBottom:14}}>
+            <input className="inp" type={show?"text":"password"} style={{paddingRight:48}} placeholder="Min 4 characters"
+              value={pass} onChange={e=>setPass(e.target.value)}/>
             <button onClick={()=>setShow(v=>!v)} style={{position:"absolute",right:14,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",cursor:"pointer",fontSize:17,color:C.textLight}}>{show?"🙈":"👁"}</button>
           </div>
           <Lbl>Confirm Password</Lbl>
-          <input className="inp" type="password" style={{marginBottom:22}} placeholder="Re-enter password" value={conf} onChange={e=>setConf(e.target.value)} onKeyDown={e=>e.key==="Enter"&&submit()}/>
-          <button className="bp" style={{width:"100%",padding:"15px 0",fontSize:15}} onClick={submit}>Create Member Account</button>
+          <input className="inp" type="password" style={{marginBottom:24}} placeholder="Re-enter password"
+            value={conf} onChange={e=>setConf(e.target.value)} onKeyDown={e=>e.key==="Enter"&&submit()}/>
+
+          <button className="bp" style={{width:"100%",padding:"15px 0",fontSize:15}} onClick={submit}>
+            Create Member Account
+          </button>
         </div>
         <p style={{textAlign:"center",fontSize:14,color:C.textLight}}>Already registered? <span onClick={onLogin} style={{color:C.gold,fontWeight:700,cursor:"pointer"}}>Sign In</span></p>
       </div>
@@ -555,51 +596,34 @@ function MemberReg({onReg,onLogin,onBack}) {
 }
 
 // ─── LEADER HOME ──────────────────────────────────────────────────────────────
-function LeaderHome({leader,db,nav,logout,onShareLoc,showToast}) {
+function LeaderHome({leader,nav,logout,onShareLoc,showToast}) {
   const [sharing,setSharing]=useState(false);
-  const [locStatus,setLocStatus]=useState("");
+  const [locMsg,setLocMsg]=useState("");
+  const evs=leader.events||[];
+  const total=leader.members.length;
+  const lastEv=evs[evs.length-1];
+  const lastPct=lastEv&&total?Math.round(((lastEv.arrivedIds||[]).length/total)*100):0;
+  const totalPending=evs.reduce((s,ev)=>s+Object.values(ev.memberAttendance||{}).filter(m=>m.status==="self_marked").length,0);
 
-  function shareMyLocation() {
-    setSharing(true);
-    setLocStatus("Getting your location…");
-    if (!navigator.geolocation){setLocStatus("GPS not supported");setSharing(false);return;}
+  function shareLocation(){
+    if (!navigator.geolocation){showToast("GPS not supported","err");return;}
+    setSharing(true); setLocMsg("📡 Getting your location…");
     navigator.geolocation.getCurrentPosition(
-      pos=>{
-        onShareLoc(pos.coords.latitude,pos.coords.longitude);
-        setLocStatus("📍 Location shared! Members can now find you.");
-        setSharing(false);
-        showToast("Location shared with group!");
-      },
-      err=>{
-        setLocStatus("❌ Location denied. Please enable GPS.");
-        setSharing(false);
-      },
+      pos=>{onShareLoc(pos.coords.latitude,pos.coords.longitude);setLocMsg("✅ Location shared with your group!");setSharing(false);showToast("Location shared!");},
+      ()=>{setLocMsg("❌ Enable GPS in your browser.");setSharing(false);showToast("GPS denied","err");},
       {enableHighAccuracy:true,timeout:10000}
     );
   }
 
-  const total=leader.members.length;
-  const evs=leader.events||[];
-  const lastEv=evs[evs.length-1];
-  const lastPct=lastEv&&total?Math.round(((lastEv.arrivedIds||[]).length/total)*100):0;
-
-  // count pending self-marks across all events
-  const totalPending=evs.reduce((sum,ev)=>{
-    const selfMarked=Object.values(ev.memberAttendance||{}).filter(m=>m.status==="self_marked").length;
-    return sum+selfMarked;
-  },0);
-
   return (
     <div className="pg" style={{maxWidth:400,margin:"0 auto",paddingBottom:40}}>
-      {/* Header */}
       <div style={{background:"linear-gradient(135deg,#2D6A4F,#1a4a35)",padding:"28px 20px 26px",borderRadius:"0 0 28px 28px",boxShadow:"0 6px 24px rgba(45,106,79,0.3)"}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
           <div>
-            <p style={{color:"rgba(255,255,255,0.65)",fontSize:11,letterSpacing:2,textTransform:"uppercase",margin:"0 0 4px"}}>👑 Group Leader</p>
+            <p style={{color:"rgba(255,255,255,0.65)",fontSize:11,letterSpacing:2,textTransform:"uppercase",margin:"0 0 4px"}}>👑 Group Leader · Hizb #{leader.hizbNo}</p>
             <h1 style={{color:"#fff",fontSize:20,fontWeight:700,margin:0}}>{leader.displayName}</h1>
-            <p style={{color:C.goldLight,fontSize:13,margin:"3px 0 0"}}>Hizb: {leader.hizbName}</p>
           </div>
-          <button onClick={logout} style={{background:"rgba(255,255,255,0.15)",border:"none",borderRadius:12,padding:"8px 14px",color:"#fff",cursor:"pointer",fontSize:13,fontWeight:600}}>Sign Out</button>
+          <button onClick={logout} style={{background:"rgba(255,255,255,0.15)",border:"none",borderRadius:12,padding:"8px 14px",color:"#fff",cursor:"pointer",fontSize:13,fontWeight:600,flexShrink:0}}>Sign Out</button>
         </div>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginTop:18}}>
           {[["👥","Members",total],["📋","Events",evs.length],["📊","Last",lastEv?lastPct+"%":"—"]].map(([ic,lb,vl])=>(
@@ -611,43 +635,38 @@ function LeaderHome({leader,db,nav,logout,onShareLoc,showToast}) {
           ))}
         </div>
       </div>
-
       <div style={{padding:"18px 18px 0",display:"flex",flexDirection:"column",gap:14}}>
-        {/* Location Share Card */}
+        {/* Location share */}
         <div className="card" style={{padding:18}}>
           <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:12}}>
             <div style={{fontSize:28}}>📍</div>
             <div>
               <p style={{margin:0,fontSize:15,fontWeight:700,color:C.text}}>Share My Location</p>
-              <p style={{margin:"2px 0 0",fontSize:12,color:C.textLight}}>Members will see your location to navigate to you</p>
+              <p style={{margin:"2px 0 0",fontSize:12,color:C.textLight}}>Members navigate to you using Google Maps</p>
             </div>
           </div>
           {leader.location&&(
             <div style={{background:"rgba(45,106,79,0.08)",borderRadius:10,padding:"8px 12px",marginBottom:10,fontSize:12,color:C.green}}>
-              ✅ Last shared: {fmtTime(leader.location.updatedAt)} — Lat {leader.location.lat.toFixed(4)}, Lng {leader.location.lng.toFixed(4)}
+              ✅ Last shared at {fmtTime(leader.location.updatedAt)}
             </div>
           )}
-          {locStatus&&<p style={{fontSize:12,color:C.brownLight,marginBottom:10,margin:"0 0 10px"}}>{locStatus}</p>}
-          <button className="bg" style={{width:"100%",padding:"12px 0",fontSize:14}} onClick={shareMyLocation} disabled={sharing}>
-            {sharing?"⏳ Getting location…":"📍 Update My Location"}
+          {locMsg&&<p style={{fontSize:12,color:C.brownLight,marginBottom:10}}>{locMsg}</p>}
+          <button className="bg" style={{width:"100%",padding:"12px 0",fontSize:14}} onClick={shareLocation} disabled={sharing}>
+            {sharing?"⏳ Getting location…":"📍 Update My Location Now"}
           </button>
         </div>
-
-        {/* Pending alert */}
         {totalPending>0&&(
           <div style={{background:"rgba(230,126,22,0.1)",border:"1.5px solid rgba(230,126,22,0.35)",borderRadius:16,padding:"14px 16px",display:"flex",alignItems:"center",gap:12}}>
             <div style={{fontSize:28}}>🔔</div>
             <div>
-              <p style={{margin:0,fontSize:14,fontWeight:700,color:"#E67E22"}}>Member Self-Check-ins</p>
-              <p style={{margin:"3px 0 0",fontSize:12,color:C.textLight}}>{totalPending} member(s) self-marked attendance. Review in Events.</p>
+              <p style={{margin:0,fontSize:14,fontWeight:700,color:"#E67E22"}}>Pending Self Check-ins</p>
+              <p style={{margin:"3px 0 0",fontSize:12,color:C.textLight}}>{totalPending} member(s) marked attendance. Check Events.</p>
             </div>
           </div>
         )}
-
         <div style={{textAlign:"center",fontSize:42}}>🕋</div>
         <p style={{textAlign:"center",fontSize:12,color:C.textLight,letterSpacing:2,textTransform:"uppercase",margin:"-8px 0 0"}}>لَبَّيْكَ اللَّهُمَّ لَبَّيْكَ</p>
-
-        <MenuCard icon="👥" title="Manage Members" sub={total+" members"} col={C.gold} onClick={()=>nav("lMembers")}/>
+        <MenuCard icon="👥" title="Manage Members" sub={total+" members in Hizb #"+leader.hizbNo} col={C.gold} onClick={()=>nav("lMembers")}/>
         <MenuCard icon="📋" title="Events & Attendance" sub={evs.length+" events"+(totalPending?" · "+totalPending+" pending":"")} col={C.green} onClick={()=>nav("lEvents")}/>
       </div>
       <Footer/>
@@ -655,19 +674,19 @@ function LeaderHome({leader,db,nav,logout,onShareLoc,showToast}) {
   );
 }
 
-// ─── LEADER EVENTS PAGE ───────────────────────────────────────────────────────
+// ─── LEADER EVENTS ────────────────────────────────────────────────────────────
 function LeaderEventsPage({leader,nav,onCreate,onDelete,onOpen,showToast}) {
   const [name,setName]=useState("");const [date,setDate]=useState("");
   const [form,setForm]=useState(false);const [del,setDel]=useState(null);
-  const [eventLoc,setEventLoc]=useState(null);const [gettingLoc,setGettingLoc]=useState(false);
+  const [evLoc,setEvLoc]=useState(null);const [gettingLoc,setGettingLoc]=useState(false);
   const total=(leader.members||[]).length;
 
-  function pickEventLocation(){
+  function pinLocation(){
+    if (!navigator.geolocation){showToast("GPS not supported","err");return;}
     setGettingLoc(true);
     navigator.geolocation.getCurrentPosition(
-      pos=>{setEventLoc({lat:pos.coords.latitude,lng:pos.coords.longitude});setGettingLoc(false);showToast("Event location set!");},
-      ()=>{setGettingLoc(false);showToast("Could not get location","err");},
-      {enableHighAccuracy:true,timeout:10000}
+      pos=>{setEvLoc({lat:pos.coords.latitude,lng:pos.coords.longitude});setGettingLoc(false);showToast("Location pinned!");},
+      ()=>{setGettingLoc(false);showToast("GPS denied","err");},{enableHighAccuracy:true,timeout:10000}
     );
   }
 
@@ -684,23 +703,22 @@ function LeaderEventsPage({leader,nav,onCreate,onDelete,onOpen,showToast}) {
             <input className="inp" style={{marginBottom:12}} placeholder="e.g. Arafat Day Majlis" value={name} onChange={e=>setName(e.target.value)}/>
             <Lbl>Date</Lbl>
             <input className="inp" type="date" style={{marginBottom:14}} value={date} onChange={e=>setDate(e.target.value)}/>
-            <Lbl>Event Location (optional)</Lbl>
-            <button className="bb" style={{width:"100%",padding:"11px 0",fontSize:13,marginBottom:eventLoc?8:16}} onClick={pickEventLocation} disabled={gettingLoc}>
-              {gettingLoc?"⏳ Getting location…":eventLoc?"📍 Location Set — Update":"📍 Pin Current Location"}
+            <Lbl>Pin Event Location (optional)</Lbl>
+            <button className="bb" style={{width:"100%",padding:"11px 0",fontSize:13,marginBottom:evLoc?8:16}} onClick={pinLocation} disabled={gettingLoc}>
+              {gettingLoc?"⏳ Getting…":evLoc?"📍 Location Pinned ✓ — Re-pin":"📍 Pin My Current Location"}
             </button>
-            {eventLoc&&<p style={{fontSize:11,color:C.green,marginBottom:14,textAlign:"center"}}>✅ {eventLoc.lat.toFixed(4)}, {eventLoc.lng.toFixed(4)}</p>}
+            {evLoc&&<p style={{fontSize:11,color:C.green,textAlign:"center",marginBottom:14}}>✅ {evLoc.lat.toFixed(5)}, {evLoc.lng.toFixed(5)}</p>}
             <button className="bg" style={{width:"100%",padding:"13px 0",fontSize:15}}
-              onClick={()=>{if(onCreate(name,date,eventLoc)){setName("");setDate("");setEventLoc(null);setForm(false);}}}>
+              onClick={()=>{if(onCreate(name,date,evLoc)){setName("");setDate("");setEvLoc(null);setForm(false);}}}>
               ✓ Create Event
             </button>
           </div>
         )}
       </div>
-
       {(leader.events||[]).length===0?(
         <div style={{textAlign:"center",padding:"60px 20px",color:C.textLight}}>
           <div style={{fontSize:46,marginBottom:12}}>📋</div>
-          <p>No events yet. Create your first one!</p>
+          <p>No events yet.</p>
         </div>
       ):(
         <div style={{padding:"0 18px",display:"flex",flexDirection:"column",gap:12}}>
@@ -723,8 +741,7 @@ function LeaderEventsPage({leader,nav,onCreate,onDelete,onOpen,showToast}) {
                     <div style={{height:"100%",width:pct+"%",background:"linear-gradient(90deg,#2D6A4F,#52B788)",borderRadius:8,transition:"width 0.4s"}}/>
                   </div>
                   <div style={{display:"flex",justifyContent:"space-between",fontSize:12,color:C.textLight}}>
-                    <span>✅ {arr} arrived</span>
-                    <span>⏳ {total-arr} remaining</span>
+                    <span>✅ {arr} arrived</span><span>⏳ {total-arr} remaining</span>
                   </div>
                   {selfMarked>0&&(
                     <div style={{marginTop:8,background:"rgba(230,126,22,0.1)",borderRadius:8,padding:"6px 10px",fontSize:12,color:"#E67E22",fontWeight:600}}>
@@ -753,25 +770,16 @@ function LeaderEventsPage({leader,nav,onCreate,onDelete,onOpen,showToast}) {
   );
 }
 
-// ─── LEADER ATTEND PAGE ───────────────────────────────────────────────────────
+// ─── LEADER ATTEND ────────────────────────────────────────────────────────────
 function LeaderAttendPage({leader,ev,onToggle,onBack,showToast}) {
   const [q,setQ]=useState("");const [tab,setTab]=useState("all");
   const members=leader.members||[];
   const arrivedIds=new Set(ev.arrivedIds||[]);
-  const total=members.length;
-  const count=arrivedIds.size;
+  const total=members.length, count=arrivedIds.size;
   const pct=total?Math.round((count/total)*100):0;
 
-  function markAll(){
-    members.forEach(m=>{ if(!arrivedIds.has(m.id)) onToggle(m.id); });
-    showToast("All marked present!");
-  }
-  function clearAll(){
-    members.forEach(m=>{ if(arrivedIds.has(m.id)) onToggle(m.id); });
-    showToast("Cleared","warn");
-  }
-
-  const selfMarks=ev.memberAttendance||{};
+  function markAll(){members.forEach(m=>{if(!arrivedIds.has(m.id))onToggle(m.id);});showToast("All marked!");}
+  function clearAll(){members.forEach(m=>{if(arrivedIds.has(m.id))onToggle(m.id);});showToast("Cleared","warn");}
 
   const shown=members.filter(m=>{
     const match=m.name.toLowerCase().includes(q.toLowerCase())||String(m.id).includes(q);
@@ -780,6 +788,7 @@ function LeaderAttendPage({leader,ev,onToggle,onBack,showToast}) {
     if (tab==="rem") return !arrivedIds.has(m.id);
     return true;
   });
+  const selfMarks=ev.memberAttendance||{};
 
   return (
     <div className="pg" style={{maxWidth:400,margin:"0 auto",paddingBottom:40}}>
@@ -794,8 +803,7 @@ function LeaderAttendPage({leader,ev,onToggle,onBack,showToast}) {
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:14}}>
           {[["👥","Total",total],["✅","Arrived",count],["⏳","Remaining",total-count]].map(([ic,lb,vl])=>(
             <div key={lb} style={{background:"rgba(255,255,255,0.18)",borderRadius:12,padding:"10px 6px",textAlign:"center"}}>
-              <div style={{fontSize:18}}>{ic}</div>
-              <div style={{fontSize:19,fontWeight:700,color:"#fff"}}>{vl}</div>
+              <div style={{fontSize:18}}>{ic}</div><div style={{fontSize:19,fontWeight:700,color:"#fff"}}>{vl}</div>
               <div style={{fontSize:10,color:"rgba(255,255,255,0.7)"}}>{lb}</div>
             </div>
           ))}
@@ -805,7 +813,6 @@ function LeaderAttendPage({leader,ev,onToggle,onBack,showToast}) {
         </div>
         <p style={{color:"rgba(255,255,255,0.75)",fontSize:11,textAlign:"right",margin:0}}>{pct}% attendance</p>
       </div>
-
       <div style={{padding:"14px 18px 0"}}>
         <div style={{display:"flex",gap:8,marginBottom:12}}>
           <button className="bg" style={{flex:1,padding:"10px 0",fontSize:13}} onClick={markAll}>✓ Mark All</button>
@@ -822,14 +829,13 @@ function LeaderAttendPage({leader,ev,onToggle,onBack,showToast}) {
           ))}
         </div>
       </div>
-
       <div className="card" style={{margin:"0 18px",overflow:"hidden"}}>
         {shown.length===0?(
           <div style={{padding:30,textAlign:"center",color:C.textLight,fontSize:14}}>No members match filter.</div>
         ):shown.map(m=>{
           const on=arrivedIds.has(m.id);
-          const key=String(m.id)+"_"+slugify(m.name);
-          const selfMark=selfMarks[key];
+          const selfKey=Object.keys(selfMarks).find(k=>selfMarks[k].memberId===m.id);
+          const selfMark=selfKey?selfMarks[selfKey]:null;
           return (
             <div key={m.id} className="mr" style={{background:on?"rgba(45,106,79,0.06)":"transparent",cursor:"pointer"}} onClick={()=>onToggle(m.id)}>
               <div className={"chk"+(on?" on":"")}>
@@ -838,14 +844,13 @@ function LeaderAttendPage({leader,ev,onToggle,onBack,showToast}) {
               <span style={{width:32,height:32,borderRadius:8,background:on?C.green:C.goldPale,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:700,color:on?"#fff":C.brown,flexShrink:0,transition:"all 0.18s"}}>{m.id}</span>
               <div style={{flex:1,minWidth:0}}>
                 <span style={{fontSize:14,color:on?C.green:C.text,fontWeight:on?600:400,display:"block",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{m.name}</span>
-                {selfMark&&<span style={{fontSize:10,color:"#E67E22"}}>🔔 Self check-in at {fmtTime(selfMark.markedAt)}</span>}
+                {selfMark&&<span style={{fontSize:10,color:"#E67E22"}}>🔔 Self check-in {fmtTime(selfMark.markedAt)}</span>}
               </div>
               {on&&<span style={{fontSize:11,color:C.greenLight,fontWeight:600,flexShrink:0}}>Present</span>}
             </div>
           );
         })}
       </div>
-
       {count===total&&total>0&&(
         <div style={{margin:"18px 18px 0",background:"linear-gradient(135deg,#2D6A4F,#1a4a35)",borderRadius:18,padding:20,textAlign:"center",animation:"pop 0.3s ease"}}>
           <div style={{fontSize:34}}>🎉</div>
@@ -859,167 +864,135 @@ function LeaderAttendPage({leader,ev,onToggle,onBack,showToast}) {
 }
 
 // ─── MEMBER HOME ──────────────────────────────────────────────────────────────
-function MemberHome({member,db,nav,logout,showToast,onMarkAttendance}) {
-  const [locStatus,setLocStatus]=useState("");
-  const [myLoc,setMyLoc]=useState(null);
-  const [gettingLoc,setGettingLoc]=useState(false);
-  const [markingEvId,setMarkingEvId]=useState(null);
-  const [distance,setDistance]=useState(null);
+function MemberHome({acc,db,logout,showToast,onMark}) {
+  const [locMsg,setLocMsg]=useState("");
+  const [dist,setDist]=useState(null);
+  const [marking,setMarking]=useState(null);
+  const leader=db.leaders[acc.leaderHizbNo];
+  const events=leader?(leader.events||[]):[];
 
-  const leader=db.leaders[member.leaderUid];
+  function openLeaderMap(){
+    if (!leader?.location){showToast("Leader hasn't shared location yet","warn");return;}
+    const {lat,lng}=leader.location;
+    window.open(`https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&travelmode=walking`,"_blank");
+  }
 
-  function requestLocation(callback) {
-    if (!navigator.geolocation){showToast("GPS not supported","err");return;}
-    setGettingLoc(true);
-    setLocStatus("📡 Getting your location…");
+  function tryMark(ev){
+    setMarking(ev.id);
+    if (!leader?.location){showToast("Leader location not shared","err");setMarking(null);return;}
+    if (!navigator.geolocation){showToast("GPS not supported","err");setMarking(null);return;}
+    setLocMsg("📡 Checking your location…");
     navigator.geolocation.getCurrentPosition(
       pos=>{
-        setMyLoc({lat:pos.coords.latitude,lng:pos.coords.longitude});
-        setGettingLoc(false);
-        if (callback) callback(pos.coords.latitude,pos.coords.longitude);
+        const d=getDistance(pos.coords.latitude,pos.coords.longitude,leader.location.lat,leader.location.lng);
+        setDist(Math.round(d));
+        if (d<=RADIUS_METERS){
+          onMark(ev.id);
+          setLocMsg("✅ Attendance marked! You are within range.");
+          showToast("✅ Attendance marked!");
+        } else {
+          setLocMsg("❌ Too far ("+Math.round(d)+"m). Must be within "+RADIUS_METERS+"m.");
+          showToast("Too far — "+Math.round(d)+"m away","err");
+        }
+        setMarking(null);
       },
-      err=>{
-        setLocStatus("❌ Please enable GPS / Location in your browser settings.");
-        setGettingLoc(false);
-        showToast("GPS access denied","err");
-      },
+      ()=>{setLocMsg("❌ GPS access denied. Enable location.");setMarking(null);showToast("GPS denied","err");},
       {enableHighAccuracy:true,timeout:12000}
     );
   }
 
-  function openLeaderMap() {
-    if (!leader?.location){showToast("Leader hasn't shared location yet","warn");return;}
-    const {lat,lng}=leader.location;
-    const url=`https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&travelmode=walking`;
-    window.open(url,"_blank");
-  }
-
-  function tryMarkAttendance(ev) {
-    setMarkingEvId(ev.id);
-    if (!leader?.location){
-      showToast("Leader location not shared yet","err");
-      setMarkingEvId(null);return;
-    }
-    requestLocation((myLat,myLng)=>{
-      const dist=getDistance(myLat,myLng,leader.location.lat,leader.location.lng);
-      setDistance(Math.round(dist));
-      if (dist<=RADIUS_METERS){
-        onMarkAttendance(member.leaderUid,ev.id,member.name,member.hizbNo);
-        showToast("✅ Attendance marked!");
-        setLocStatus("✅ You are within range. Attendance marked!");
-      } else {
-        showToast("Too far from leader ("+Math.round(dist)+"m away)","err");
-        setLocStatus("❌ You are "+Math.round(dist)+"m away. Must be within "+RADIUS_METERS+"m of your leader.");
-      }
-      setMarkingEvId(null);
-    });
-  }
-
-  const events=leader?(leader.events||[]):[];
-  const myKey=(evId)=>{
+  function alreadyMarked(evId){
     const ev=events.find(e=>e.id===evId);
     if (!ev) return false;
-    const key=String(member.hizbNo)+"_"+slugify(member.name);
-    return !!(ev.memberAttendance||{})[key];
-  };
+    return !!(ev.memberAttendance||{})[acc.key];
+  }
 
   return (
     <div className="pg" style={{maxWidth:400,margin:"0 auto",paddingBottom:40}}>
-      {/* Header */}
       <div style={{background:"linear-gradient(135deg,#B8860B,#8B6914)",padding:"28px 20px 26px",borderRadius:"0 0 28px 28px",boxShadow:"0 6px 24px rgba(184,134,11,0.3)"}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
           <div>
-            <p style={{color:"rgba(255,255,255,0.65)",fontSize:11,letterSpacing:2,textTransform:"uppercase",margin:"0 0 4px"}}>🤲 Group Member</p>
-            <h1 style={{color:"#fff",fontSize:20,fontWeight:700,margin:0}}>{member.name}</h1>
-            <p style={{color:"rgba(255,255,255,0.85)",fontSize:13,margin:"3px 0 0"}}>Hizb #{member.hizbNo} · {member.leaderHizbName}</p>
+            <p style={{color:"rgba(255,255,255,0.65)",fontSize:11,letterSpacing:2,textTransform:"uppercase",margin:"0 0 4px"}}>🤲 Group Member · Hizb #{acc.hizbNo}</p>
+            <h1 style={{color:"#fff",fontSize:20,fontWeight:700,margin:0}}>{acc.memberName}</h1>
+            <p style={{color:"rgba(255,255,255,0.8)",fontSize:13,margin:"3px 0 0"}}>Leader: {leader?.displayName}</p>
           </div>
-          <button onClick={logout} style={{background:"rgba(255,255,255,0.15)",border:"none",borderRadius:12,padding:"8px 14px",color:"#fff",cursor:"pointer",fontSize:13,fontWeight:600}}>Sign Out</button>
+          <button onClick={logout} style={{background:"rgba(255,255,255,0.15)",border:"none",borderRadius:12,padding:"8px 14px",color:"#fff",cursor:"pointer",fontSize:13,fontWeight:600,flexShrink:0}}>Sign Out</button>
         </div>
       </div>
 
       <div style={{padding:"18px 18px 0",display:"flex",flexDirection:"column",gap:14}}>
-
-        {/* Find Leader Card */}
+        {/* Find Leader */}
         <div className="card" style={{padding:18}}>
-          <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:14}}>
-            <div style={{fontSize:32}}>🗺️</div>
+          <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:12}}>
+            <div style={{fontSize:30}}>🗺️</div>
             <div>
               <p style={{margin:0,fontSize:15,fontWeight:700,color:C.text}}>Find My Leader</p>
-              <p style={{margin:"2px 0 0",fontSize:12,color:C.textLight}}>Navigate to {leader?.displayName||"your leader"}</p>
+              <p style={{margin:"2px 0 0",fontSize:12,color:C.textLight}}>Navigate to {leader?.displayName}</p>
             </div>
           </div>
           {leader?.location?(
-            <div style={{background:"rgba(45,106,79,0.08)",borderRadius:10,padding:"10px 14px",marginBottom:12,fontSize:12,color:C.green}}>
-              📍 Leader location available · Updated {fmtTime(leader.location.updatedAt)}
+            <div style={{background:"rgba(45,106,79,0.08)",borderRadius:10,padding:"8px 12px",marginBottom:10,fontSize:12,color:C.green}}>
+              📍 Leader location available · {fmtTime(leader.location.updatedAt)}
             </div>
           ):(
-            <div style={{background:"rgba(220,38,38,0.07)",borderRadius:10,padding:"10px 14px",marginBottom:12,fontSize:12,color:C.red}}>
+            <div style={{background:"rgba(192,57,43,0.07)",borderRadius:10,padding:"8px 12px",marginBottom:10,fontSize:12,color:C.red}}>
               ⏳ Leader hasn't shared location yet
             </div>
           )}
           <button className="bb" style={{width:"100%",padding:"13px 0",fontSize:14}} onClick={openLeaderMap}>
-            🗺️ Open Google Maps — Navigate to Leader
+            🗺️ Open Google Maps → Navigate to Leader
           </button>
         </div>
 
-        {/* Distance indicator */}
-        {distance!==null&&(
-          <div style={{background:distance<=RADIUS_METERS?"rgba(45,106,79,0.1)":"rgba(220,38,38,0.08)",border:`1.5px solid ${distance<=RADIUS_METERS?"rgba(45,106,79,0.3)":"rgba(220,38,38,0.25)"}`,borderRadius:14,padding:"12px 16px",display:"flex",alignItems:"center",gap:12}}>
-            <div style={{fontSize:26}}>{distance<=RADIUS_METERS?"✅":"❌"}</div>
+        {dist!==null&&(
+          <div style={{background:dist<=RADIUS_METERS?"rgba(45,106,79,0.1)":"rgba(192,57,43,0.08)",border:`1.5px solid ${dist<=RADIUS_METERS?"rgba(45,106,79,0.3)":"rgba(192,57,43,0.25)"}`,borderRadius:14,padding:"12px 16px",display:"flex",alignItems:"center",gap:12}}>
+            <div style={{fontSize:26}}>{dist<=RADIUS_METERS?"✅":"❌"}</div>
             <div>
-              <p style={{margin:0,fontSize:14,fontWeight:700,color:distance<=RADIUS_METERS?C.green:C.red}}>{distance<=RADIUS_METERS?"Within Range":"Out of Range"}</p>
-              <p style={{margin:"2px 0 0",fontSize:12,color:C.textLight}}>{distance}m from leader · Limit: {RADIUS_METERS}m</p>
+              <p style={{margin:0,fontSize:14,fontWeight:700,color:dist<=RADIUS_METERS?C.green:C.red}}>{dist<=RADIUS_METERS?"Within Range":"Out of Range"}</p>
+              <p style={{margin:"2px 0 0",fontSize:12,color:C.textLight}}>{dist}m from leader · Limit {RADIUS_METERS}m</p>
             </div>
           </div>
         )}
-
-        {locStatus&&<p style={{fontSize:13,color:C.brownLight,textAlign:"center",margin:0}}>{locStatus}</p>}
+        {locMsg&&<p style={{fontSize:13,color:C.brownLight,textAlign:"center",margin:0}}>{locMsg}</p>}
 
         {/* Events */}
-        <div>
-          <p style={{fontSize:13,fontWeight:700,color:C.textLight,letterSpacing:1,textTransform:"uppercase",marginBottom:10}}>📋 Events — Mark Your Attendance</p>
-          {events.length===0?(
-            <div className="card" style={{padding:30,textAlign:"center",color:C.textLight}}>
-              <div style={{fontSize:36,marginBottom:8}}>📋</div>
-              <p style={{fontSize:14}}>No events created by your leader yet.</p>
-            </div>
-          ):([...events].reverse().map(ev=>{
-            const alreadyMarked=myKey(ev.id);
-            return (
-              <div key={ev.id} className="card" style={{marginBottom:12,overflow:"hidden"}}>
-                <div style={{padding:"16px"}}>
-                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
-                    <div>
-                      <p style={{margin:0,fontSize:15,fontWeight:700,color:C.text}}>{ev.name}</p>
-                      <p style={{margin:"3px 0 0",fontSize:12,color:C.textLight}}>📅 {fmtDate(ev.date)}</p>
-                    </div>
-                    {alreadyMarked&&<span style={{background:C.green,color:"#fff",fontSize:12,fontWeight:700,padding:"4px 12px",borderRadius:20,flexShrink:0}}>✅ Marked</span>}
+        <p style={{fontSize:12,fontWeight:700,color:C.textLight,letterSpacing:1.5,textTransform:"uppercase",margin:"4px 0 0"}}>📋 Events</p>
+        {events.length===0?(
+          <div className="card" style={{padding:30,textAlign:"center",color:C.textLight}}>
+            <div style={{fontSize:36,marginBottom:8}}>📋</div>
+            <p style={{fontSize:14}}>No events from your leader yet.</p>
+          </div>
+        ):[...events].reverse().map(ev=>{
+          const marked=alreadyMarked(ev.id);
+          return (
+            <div key={ev.id} className="card" style={{overflow:"hidden"}}>
+              <div style={{padding:16}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
+                  <div>
+                    <p style={{margin:0,fontSize:15,fontWeight:700,color:C.text}}>{ev.name}</p>
+                    <p style={{margin:"3px 0 0",fontSize:12,color:C.textLight}}>📅 {fmtDate(ev.date)}</p>
                   </div>
-                  {ev.eventLocation&&(
-                    <button className="bb" style={{width:"100%",padding:"10px 0",fontSize:13,marginBottom:10}}
-                      onClick={()=>{
-                        const url=`https://www.google.com/maps/dir/?api=1&destination=${ev.eventLocation.lat},${ev.eventLocation.lng}&travelmode=walking`;
-                        window.open(url,"_blank");
-                      }}>
-                      📍 Navigate to Event Location
-                    </button>
-                  )}
-                  {alreadyMarked?(
-                    <div style={{background:"rgba(45,106,79,0.08)",borderRadius:10,padding:"10px 14px",fontSize:13,color:C.green,textAlign:"center",fontWeight:600}}>
-                      ✅ You have marked your attendance for this event
-                    </div>
-                  ):(
-                    <button className="bg" style={{width:"100%",padding:"13px 0",fontSize:14}}
-                      onClick={()=>tryMarkAttendance(ev)}
-                      disabled={markingEvId===ev.id}>
-                      {markingEvId===ev.id?"📡 Checking location…":"✅ Mark My Attendance"}
-                    </button>
-                  )}
+                  {marked&&<span style={{background:C.green,color:"#fff",fontSize:12,fontWeight:700,padding:"4px 12px",borderRadius:20,flexShrink:0}}>✅ Marked</span>}
                 </div>
+                {ev.eventLocation&&(
+                  <button className="bb" style={{width:"100%",padding:"10px 0",fontSize:13,marginBottom:10}}
+                    onClick={()=>window.open(`https://www.google.com/maps/dir/?api=1&destination=${ev.eventLocation.lat},${ev.eventLocation.lng}&travelmode=walking`,"_blank")}>
+                    📍 Navigate to Event Location
+                  </button>
+                )}
+                {marked?(
+                  <div style={{background:"rgba(45,106,79,0.08)",borderRadius:10,padding:"10px 14px",fontSize:13,color:C.green,textAlign:"center",fontWeight:600}}>
+                    ✅ Attendance marked for this event
+                  </div>
+                ):(
+                  <button className="bg" style={{width:"100%",padding:"13px 0",fontSize:14}} onClick={()=>tryMark(ev)} disabled={marking===ev.id}>
+                    {marking===ev.id?"📡 Checking your location…":"✅ Mark My Attendance"}
+                  </button>
+                )}
               </div>
-            );
-          }))}
-        </div>
+            </div>
+          );
+        })}
       </div>
       <Footer/>
     </div>
@@ -1027,7 +1000,7 @@ function MemberHome({member,db,nav,logout,showToast,onMarkAttendance}) {
 }
 
 // ─── MEMBERS PAGE ─────────────────────────────────────────────────────────────
-function MembersPage({leader,nav,onDelete,onImport,showToast}) {
+function MembersPage({leader,nav,onDelete,onImport}) {
   const [q,setQ]=useState("");const [del,setDel]=useState(null);
   const fileRef=useRef(null);
   const list=(leader.members||[]).filter(m=>m.name.toLowerCase().includes(q.toLowerCase())||String(m.id).includes(q));
@@ -1041,7 +1014,7 @@ function MembersPage({leader,nav,onDelete,onImport,showToast}) {
           <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" style={{display:"none"}} onChange={e=>{if(e.target.files[0]){onImport(e.target.files[0]);e.target.value="";}}}/>
         </div>
         <div style={{background:"rgba(184,134,11,0.08)",border:"1px solid rgba(184,134,11,0.22)",borderRadius:10,padding:"8px 13px",marginBottom:12,fontSize:12,color:C.brownLight}}>
-          📊 Excel format: Column A = ID number · Column B = Name
+          📊 Excel: Column A = ID · Column B = Name
         </div>
         <div className="sb" style={{marginBottom:10}}>
           <span>🔍</span>
@@ -1076,7 +1049,7 @@ function MembersPage({leader,nav,onDelete,onImport,showToast}) {
   );
 }
 
-// ─── ADD MEMBER PAGE ──────────────────────────────────────────────────────────
+// ─── ADD MEMBER ───────────────────────────────────────────────────────────────
 function AddMemPage({leader,nav,onAdd}) {
   const next=(leader.members||[]).length>0?Math.max(...leader.members.map(m=>m.id))+1:1;
   const [id,setId]=useState(String(next));const [name,setName]=useState("");
@@ -1094,7 +1067,7 @@ function AddMemPage({leader,nav,onAdd}) {
           <button className="bp" style={{width:"100%",padding:"15px 0",fontSize:15}} onClick={submit}>+ Add Member</button>
         </div>
         <div style={{marginTop:14,background:"rgba(45,106,79,0.07)",border:"1px solid rgba(45,106,79,0.2)",borderRadius:12,padding:14,fontSize:13,color:C.green}}>
-          💡 Tip: Use Excel import for adding many members at once.
+          💡 Use Excel import for adding many members at once.
         </div>
       </div>
       <Footer/>
@@ -1102,7 +1075,7 @@ function AddMemPage({leader,nav,onAdd}) {
   );
 }
 
-// ─── SMALL COMPONENTS ─────────────────────────────────────────────────────────
+// ─── SHARED SMALL COMPONENTS ──────────────────────────────────────────────────
 function Bar({title,back}) {
   return (
     <div style={{display:"flex",alignItems:"center",gap:12,padding:"14px 18px 12px",background:C.cardBg,borderBottom:"1px solid rgba(212,175,55,0.18)",position:"sticky",top:0,zIndex:10,boxShadow:"0 2px 8px rgba(107,58,42,0.08)"}}>
