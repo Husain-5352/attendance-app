@@ -187,10 +187,12 @@ export default function App() {
     showToast("Welcome, "+name.trim()+"!");
   }
 
-  function leaderLogin(hizbNo,password) {
+  function leaderLogin(hizbNo,name,password) {
     const no=parseInt(hizbNo);
     const l=db.leaders[no];
+    if (!no||!name.trim()||!password){showToast("Fill all fields","err");return;}
     if (!l){showToast("Hizb #"+no+" not found","err");return;}
+    if (l.displayName.toLowerCase()!==name.trim().toLowerCase()){showToast("Name does not match Hizb #"+no,"err");return;}
     if (l.password!==password){showToast("Wrong password","err");return;}
     setSession({role:"leader",hizbNo:no});
     showToast("Welcome back, "+l.displayName+"!");
@@ -393,22 +395,29 @@ function EntryPage({setPage}) {
 
 // ─── LEADER LOGIN ─────────────────────────────────────────────────────────────
 function LeaderLogin({onLogin,onReg,onBack}) {
-  const [no,setNo]=useState("");const [pass,setPass]=useState("");const [show,setShow]=useState(false);
+  const [no,setNo]=useState("");
+  const [name,setName]=useState("");
+  const [pass,setPass]=useState("");
+  const [show,setShow]=useState(false);
   return (
     <div className="pg" style={{maxWidth:400,margin:"0 auto",padding:"0 0 40px"}}>
       <Bar title="Leader Sign In" back={onBack}/>
       <div style={{padding:"24px 18px 0"}}>
         <div style={{textAlign:"center",fontSize:44,marginBottom:18}}>👑</div>
         <div className="card" style={{padding:24,marginBottom:18}}>
+          <Lbl>Username (Full Name)</Lbl>
+          <input className="inp" style={{marginBottom:14}} placeholder="e.g. Husain Dewaswala"
+            value={name} onChange={e=>setName(e.target.value)}/>
           <Lbl>Hizb Number</Lbl>
-          <input className="inp" type="number" style={{marginBottom:14}} placeholder="e.g. 53" value={no} onChange={e=>setNo(e.target.value)}/>
+          <input className="inp" type="number" style={{marginBottom:14}} placeholder="e.g. 53"
+            value={no} onChange={e=>setNo(e.target.value)}/>
           <Lbl>Password</Lbl>
           <div style={{position:"relative",marginBottom:24}}>
             <input className="inp" type={show?"text":"password"} style={{paddingRight:48}} placeholder="Your password"
-              value={pass} onChange={e=>setPass(e.target.value)} onKeyDown={e=>e.key==="Enter"&&onLogin(no,pass)}/>
+              value={pass} onChange={e=>setPass(e.target.value)} onKeyDown={e=>e.key==="Enter"&&onLogin(no,name,pass)}/>
             <button onClick={()=>setShow(v=>!v)} style={{position:"absolute",right:14,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",cursor:"pointer",fontSize:17,color:C.textLight}}>{show?"🙈":"👁"}</button>
           </div>
-          <button className="bg" style={{width:"100%",padding:"15px 0",fontSize:15}} onClick={()=>onLogin(no,pass)}>Sign In as Leader</button>
+          <button className="bg" style={{width:"100%",padding:"15px 0",fontSize:15}} onClick={()=>onLogin(no,name,pass)}>Sign In as Leader</button>
         </div>
         <p style={{textAlign:"center",fontSize:14,color:C.textLight}}>New leader? <span onClick={onReg} style={{color:C.gold,fontWeight:700,cursor:"pointer"}}>Register</span></p>
       </div>
@@ -607,12 +616,54 @@ function LeaderHome({leader,nav,logout,onShareLoc,showToast}) {
 
   function shareLocation(){
     if (!navigator.geolocation){showToast("GPS not supported","err");return;}
-    setSharing(true); setLocMsg("📡 Getting your location…");
-    navigator.geolocation.getCurrentPosition(
-      pos=>{onShareLoc(pos.coords.latitude,pos.coords.longitude);setLocMsg("✅ Location shared with your group!");setSharing(false);showToast("Location shared!");},
-      ()=>{setLocMsg("❌ Enable GPS in your browser.");setSharing(false);showToast("GPS denied","err");},
-      {enableHighAccuracy:true,timeout:10000}
-    );
+    setSharing(true);
+    setLocMsg("📡 Acquiring precise location… (takes up to 15s)");
+    let bestReading=null;
+    let watchId=null;
+    let settled=false;
+    const ACCURACY_TARGET=10; // aim for 10 metres
+    const TIMEOUT_MS=15000;   // max 15 seconds
+
+    function finish(reading){
+      if (settled) return;
+      settled=true;
+      if (watchId!==null) navigator.geolocation.clearWatch(watchId);
+      onShareLoc(reading.latitude, reading.longitude);
+      const acc=Math.round(reading.accuracy);
+      setLocMsg("✅ Location shared! Accuracy: ±"+acc+"m");
+      setSharing(false);
+      showToast("📍 Shared — ±"+acc+"m accuracy!");
+    }
+
+    function onPos(pos){
+      const c=pos.coords;
+      if (!bestReading || c.accuracy < bestReading.accuracy){
+        bestReading=c;
+        setLocMsg("📡 Improving accuracy… ±"+Math.round(c.accuracy)+"m");
+      }
+      if (c.accuracy <= ACCURACY_TARGET) finish(c);
+    }
+
+    function onErr(){
+      if (settled) return;
+      if (bestReading){ finish(bestReading); }
+      else { settled=true; setLocMsg("❌ GPS denied. Enable location access."); setSharing(false); showToast("GPS denied","err"); }
+    }
+
+    watchId=navigator.geolocation.watchPosition(onPos, onErr,
+      {enableHighAccuracy:true, timeout:TIMEOUT_MS, maximumAge:0});
+
+    // Hard timeout — use best reading we have
+    setTimeout(()=>{
+      if (!settled && bestReading) finish(bestReading);
+      else if (!settled){
+        settled=true;
+        if (watchId!==null) navigator.geolocation.clearWatch(watchId);
+        setLocMsg("❌ Could not get location. Try outdoors.");
+        setSharing(false);
+        showToast("Location timeout","err");
+      }
+    }, TIMEOUT_MS);
   }
 
   return (
@@ -881,24 +932,61 @@ function MemberHome({acc,db,logout,showToast,onMark}) {
     setMarking(ev.id);
     if (!leader?.location){showToast("Leader location not shared","err");setMarking(null);return;}
     if (!navigator.geolocation){showToast("GPS not supported","err");setMarking(null);return;}
-    setLocMsg("📡 Checking your location…");
-    navigator.geolocation.getCurrentPosition(
-      pos=>{
-        const d=getDistance(pos.coords.latitude,pos.coords.longitude,leader.location.lat,leader.location.lng);
-        setDist(Math.round(d));
-        if (d<=RADIUS_METERS){
-          onMark(ev.id);
-          setLocMsg("✅ Attendance marked! You are within range.");
-          showToast("✅ Attendance marked!");
-        } else {
-          setLocMsg("❌ Too far ("+Math.round(d)+"m). Must be within "+RADIUS_METERS+"m.");
-          showToast("Too far — "+Math.round(d)+"m away","err");
-        }
+    setLocMsg("📡 Getting precise location… (up to 15s)");
+    setDist(null);
+
+    let best=null;
+    let watchId=null;
+    let settled=false;
+    const ACCURACY_TARGET=15;
+    const TIMEOUT_MS=15000;
+
+    function finish(coords){
+      if (settled) return;
+      settled=true;
+      if (watchId!==null) navigator.geolocation.clearWatch(watchId);
+      const d=getDistance(coords.latitude,coords.longitude,leader.location.lat,leader.location.lng);
+      setDist(Math.round(d));
+      const acc=Math.round(coords.accuracy);
+      if (d<=RADIUS_METERS){
+        onMark(ev.id);
+        setLocMsg("✅ Attendance marked! Distance: "+Math.round(d)+"m · Accuracy: ±"+acc+"m");
+        showToast("✅ Attendance marked!");
+      } else {
+        setLocMsg("❌ "+Math.round(d)+"m from leader. Must be within "+RADIUS_METERS+"m. Accuracy: ±"+acc+"m");
+        showToast("Too far — "+Math.round(d)+"m away","err");
+      }
+      setMarking(null);
+    }
+
+    function onPos(pos){
+      const c=pos.coords;
+      if (!best||c.accuracy<best.accuracy){
+        best=c;
+        setLocMsg("📡 Improving accuracy… ±"+Math.round(c.accuracy)+"m");
+      }
+      if (c.accuracy<=ACCURACY_TARGET) finish(c);
+    }
+
+    function onErr(){
+      if (settled) return;
+      if (best){ finish(best); }
+      else { settled=true; if(watchId!==null)navigator.geolocation.clearWatch(watchId); setLocMsg("❌ GPS denied. Enable location access."); setMarking(null); showToast("GPS denied","err"); }
+    }
+
+    watchId=navigator.geolocation.watchPosition(onPos,onErr,
+      {enableHighAccuracy:true,timeout:TIMEOUT_MS,maximumAge:0});
+
+    setTimeout(()=>{
+      if (!settled&&best) finish(best);
+      else if (!settled){
+        settled=true;
+        if(watchId!==null)navigator.geolocation.clearWatch(watchId);
+        setLocMsg("❌ Could not get location. Go outside for better GPS.");
         setMarking(null);
-      },
-      ()=>{setLocMsg("❌ GPS access denied. Enable location.");setMarking(null);showToast("GPS denied","err");},
-      {enableHighAccuracy:true,timeout:12000}
-    );
+        showToast("Location timeout","err");
+      }
+    },TIMEOUT_MS);
   }
 
   function alreadyMarked(evId){
