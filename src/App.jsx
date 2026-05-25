@@ -356,8 +356,7 @@ export default function App() {
       <style>{GS}</style>
 
       {page==="entry"  && <EntryPage setPage={setPage}/>}
-      {page==="lLogin" && <LeaderLogin  onLogin={leaderLogin}  onReg={()=>setPage("lReg")}   onBack={()=>setPage("entry")}/>}
-      {page==="lReg"   && <LeaderReg    onReg={leaderRegister} onLogin={()=>setPage("lLogin")} onBack={()=>setPage("entry")}/>}
+      {page==="lLogin" && <LeaderLogin  onLogin={leaderLogin} onBack={()=>setPage("entry")}/>}
       {page==="mLogin" && <MemberLogin  db={db} onLogin={memberLogin}  onReg={()=>setPage("mReg")}   onBack={()=>setPage("entry")}/>}
       {page==="mReg"   && <MemberReg    db={db} onReg={memberRegister} onLogin={()=>setPage("mLogin")} onBack={()=>setPage("entry")}/>}
 
@@ -424,7 +423,7 @@ function EntryPage({setPage}) {
 }
 
 // ─── LEADER LOGIN ─────────────────────────────────────────────────────────────
-function LeaderLogin({onLogin,onReg,onBack}) {
+function LeaderLogin({onLogin,onBack}) {
   const [no,setNo]=useState("");
   const [name,setName]=useState("");
   const [pass,setPass]=useState("");
@@ -449,50 +448,18 @@ function LeaderLogin({onLogin,onReg,onBack}) {
           </div>
           <button className="bg" style={{width:"100%",padding:"15px 0",fontSize:15}} onClick={()=>onLogin(name,pass,no)}>Sign In as Leader</button>
         </div>
-        <p style={{textAlign:"center",fontSize:14,color:C.textLight}}>New leader? <span onClick={onReg} style={{color:C.gold,fontWeight:700,cursor:"pointer"}}>Register</span></p>
+        <div style={{background:"rgba(184,134,11,0.08)",border:"1px solid rgba(184,134,11,0.22)",borderRadius:12,padding:"12px 16px",textAlign:"center"}}>
+          <p style={{margin:0,fontSize:12,color:C.brownLight,lineHeight:1.6}}>
+            📋 Enter your <strong>username</strong> and <strong>password</strong> as registered,<br/>
+            then add your <strong>Hizb No.</strong> to link it to your account.
+          </p>
+        </div>
       </div>
       <Footer/>
     </div>
   );
 }
 
-// ─── LEADER REGISTER ──────────────────────────────────────────────────────────
-function LeaderReg({onReg,onLogin,onBack}) {
-  const [no,setNo]=useState("");const [name,setName]=useState("");
-  const [pass,setPass]=useState("");const [conf,setConf]=useState("");const [show,setShow]=useState(false);
-  function submit(){
-    if (!no||!name.trim()||!pass){alert("Fill all fields");return;}
-    if (pass.length<4){alert("Password min 4 characters");return;}
-    if (pass!==conf){alert("Passwords do not match");return;}
-    onReg(name.trim(),pass,no);
-  }
-  return (
-    <div className="pg" style={{maxWidth:400,margin:"0 auto",padding:"0 0 40px"}}>
-      <Bar title="Leader Registration" back={onBack}/>
-      <div style={{padding:"24px 18px 0"}}>
-        <div style={{textAlign:"center",fontSize:44,marginBottom:18}}>👑</div>
-        <div className="card" style={{padding:24,marginBottom:18}}>
-          <Lbl>Hizb Number</Lbl>
-          <input className="inp" type="number" style={{marginBottom:14}} placeholder="Your assigned Hizb number" value={no} onChange={e=>setNo(e.target.value)}/>
-          <Lbl>Your Full Name</Lbl>
-          <input className="inp" style={{marginBottom:14}} placeholder="e.g. Ahmed Ali" value={name} onChange={e=>setName(e.target.value)}/>
-          <Lbl>Password</Lbl>
-          <div style={{position:"relative",marginBottom:14}}>
-            <input className="inp" type={show?"text":"password"} style={{paddingRight:48}} placeholder="Min 4 characters"
-              value={pass} onChange={e=>setPass(e.target.value)}/>
-            <button onClick={()=>setShow(v=>!v)} style={{position:"absolute",right:14,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",cursor:"pointer",fontSize:17,color:C.textLight}}>{show?"🙈":"👁"}</button>
-          </div>
-          <Lbl>Confirm Password</Lbl>
-          <input className="inp" type="password" style={{marginBottom:24}} placeholder="Re-enter password"
-            value={conf} onChange={e=>setConf(e.target.value)} onKeyDown={e=>e.key==="Enter"&&submit()}/>
-          <button className="bg" style={{width:"100%",padding:"15px 0",fontSize:15}} onClick={submit}>Create Leader Account</button>
-        </div>
-        <p style={{textAlign:"center",fontSize:14,color:C.textLight}}>Already registered? <span onClick={onLogin} style={{color:C.gold,fontWeight:700,cursor:"pointer"}}>Sign In</span></p>
-      </div>
-      <Footer/>
-    </div>
-  );
-}
 
 // ─── MEMBER LOGIN ─────────────────────────────────────────────────────────────
 function MemberLogin({db,onLogin,onReg,onBack}) {
