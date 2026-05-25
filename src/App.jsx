@@ -36,17 +36,18 @@ const HUSAIN_MEMBERS = [
 // ── DB ────────────────────────────────────────────────────────────────────────
 function defaultDB() {
   return {
+    // leaders keyed by username slug
     leaders: {
-      53: {
-        hizbNo: 53,
+      "husain_dewaswala": {
+        slug: "husain_dewaswala",
         displayName: "Husain Dewaswala",
         password: "7865253",
+        hizbNo: 53,           // fixed hizb no
         members: HUSAIN_MEMBERS,
         events: [],
         location: null,
       }
     },
-    // members keyed by "hizbNo_memberIndex" e.g. "53_7"
     memberAccounts: {}
   };
 }
@@ -58,13 +59,25 @@ function loadDB() {
     const db = JSON.parse(raw);
     if (!db.leaders) db.leaders = {};
     if (!db.memberAccounts) db.memberAccounts = {};
+    // migrate old numeric-keyed leaders to slug keys
+    const numericKeys = Object.keys(db.leaders).filter(k => !isNaN(parseInt(k)));
+    numericKeys.forEach(k => {
+      const l = db.leaders[k];
+      const slug = l.slug || l.displayName.toLowerCase().replace(/\s+/g,"_").replace(/[^a-z0-9_]/g,"");
+      if (!db.leaders[slug]) {
+        db.leaders[slug] = {...l, slug, hizbNo: parseInt(k)};
+      }
+      delete db.leaders[k];
+    });
     // always ensure Husain
-    if (!db.leaders[53]) {
-      db.leaders[53] = defaultDB().leaders[53];
+    if (!db.leaders["husain_dewaswala"]) {
+      db.leaders["husain_dewaswala"] = defaultDB().leaders["husain_dewaswala"];
     } else {
-      db.leaders[53].password = "7865253";
-      db.leaders[53].hizbNo = 53;
-      if (!db.leaders[53].members?.length) db.leaders[53].members = HUSAIN_MEMBERS;
+      db.leaders["husain_dewaswala"].password = "7865253";
+      db.leaders["husain_dewaswala"].hizbNo = 53;
+      db.leaders["husain_dewaswala"].slug = "husain_dewaswala";
+      if (!db.leaders["husain_dewaswala"].members?.length)
+        db.leaders["husain_dewaswala"].members = HUSAIN_MEMBERS;
     }
     // deserialize events
     Object.values(db.leaders).forEach(l => {
@@ -138,6 +151,10 @@ const GS = `
   input[type=date]{color-scheme:light}
   select.inp option{color:#2C1810;background:#fff}
   *{-webkit-tap-highlight-color:transparent;box-sizing:border-box}
+  @keyframes slideDown{from{opacity:0;transform:translateY(-20px)}to{opacity:1;transform:translateY(0)}}
+  .gps-banner{animation:slideDown 0.4s ease;position:relative;overflow:hidden}
+  .gps-banner::before{content:"";position:absolute;top:0;left:-100%;width:60%;height:100%;background:linear-gradient(90deg,transparent,rgba(255,255,255,0.15),transparent);animation:shimmer 2s infinite}
+  @keyframes shimmer{from{left:-100%}to{left:150%}}
 `;
 
 // ── ROOT ──────────────────────────────────────────────────────────────────────
@@ -159,9 +176,9 @@ export default function App() {
     else setPage(session.role==="leader"?"lHome":"mHome");
   },[session]);
 
-  function patchLeader(hizbNo,fn) {
+  function patchLeader(slug,fn) {
     setDb(prev=>{
-      const u={...prev,leaders:{...prev.leaders,[hizbNo]:fn(prev.leaders[hizbNo])}};
+      const u={...prev,leaders:{...prev.leaders,[slug]:fn(prev.leaders[slug])}};
       saveDB(u); return u;
     });
   }
@@ -172,47 +189,61 @@ export default function App() {
     });
   }
 
-  const leader = session?.role==="leader" ? db.leaders[session.hizbNo] : null;
+  const leader = session?.role==="leader" ? db.leaders[session.slug] : null;
   const memberAcc = session?.role==="member" ? db.memberAccounts[session.key] : null;
 
   // ── LEADER AUTH ──
-  function leaderRegister(hizbNo,name,password) {
+  function leaderRegister(name,password,hizbNo) {
     const no=parseInt(hizbNo);
-    if (!no||!name.trim()||!password){showToast("Fill all fields","err");return;}
+    if (!name.trim()||!password||!no){showToast("Fill all fields","err");return;}
     if (password.length<4){showToast("Password min 4 chars","err");return;}
-    if (db.leaders[no]){showToast("Hizb #"+no+" already registered","err");return;}
-    const nl={hizbNo:no,displayName:name.trim(),password,members:[],events:[],location:null};
-    setDb(prev=>{const u={...prev,leaders:{...prev.leaders,[no]:nl}};saveDB(u);return u;});
-    setSession({role:"leader",hizbNo:no});
+    const slug=name.trim().toLowerCase().replace(/\s+/g,"_").replace(/[^a-z0-9_]/g,"");
+    if (db.leaders[slug]){showToast("Account already exists for this name","err");return;}
+    // check hizbNo not already taken by another leader
+    const hizbTaken=Object.values(db.leaders).find(l=>l.hizbNo===no);
+    if (hizbTaken){showToast("Hizb #"+no+" already assigned to "+hizbTaken.displayName,"err");return;}
+    const nl={slug,displayName:name.trim(),password,hizbNo:no,members:[],events:[],location:null};
+    setDb(prev=>{const u={...prev,leaders:{...prev.leaders,[slug]:nl}};saveDB(u);return u;});
+    setSession({role:"leader",slug});
     showToast("Welcome, "+name.trim()+"!");
   }
 
-  function leaderLogin(hizbNo,name,password) {
+  function leaderLogin(name,password,hizbNo) {
     const no=parseInt(hizbNo);
-    const l=db.leaders[no];
-    if (!no||!name.trim()||!password){showToast("Fill all fields","err");return;}
-    if (!l){showToast("Hizb #"+no+" not found","err");return;}
-    if (l.displayName.toLowerCase()!==name.trim().toLowerCase()){showToast("Name does not match Hizb #"+no,"err");return;}
+    if (!name.trim()||!password||!no){showToast("Fill all fields","err");return;}
+    const slug=name.trim().toLowerCase().replace(/\s+/g,"_").replace(/[^a-z0-9_]/g,"");
+    const l=db.leaders[slug];
+    if (!l){showToast("Account not found. Please register first.","err");return;}
     if (l.password!==password){showToast("Wrong password","err");return;}
-    setSession({role:"leader",hizbNo:no});
-    showToast("Welcome back, "+l.displayName+"!");
+    // If leader has no hizbNo yet, assign it now (first time adding hizbNo)
+    if (!l.hizbNo) {
+      // check not taken
+      const taken=Object.values(db.leaders).find(x=>x.hizbNo===no && x.slug!==slug);
+      if (taken){showToast("Hizb #"+no+" already taken by "+taken.displayName,"err");return;}
+      patchLeader(slug, x=>({...x, hizbNo:no}));
+      setSession({role:"leader",slug});
+      showToast("Welcome! Hizb #"+no+" linked to your account.");
+    } else {
+      // hizbNo is fixed - must match
+      if (l.hizbNo!==no){showToast("Wrong Hizb No. Your Hizb is #"+l.hizbNo,"err");return;}
+      setSession({role:"leader",slug});
+      showToast("Welcome back, "+l.displayName+"!");
+    }
   }
 
   // ── MEMBER AUTH ──
   // Members register: hizbNo + memberName (selected from dropdown) + password
   function memberRegister(hizbNo,memberName,password) {
     const no=parseInt(hizbNo);
-    const l=db.leaders[no];
-    if (!l){showToast("Hizb #"+no+" not found","err");return;}
+    // find leader by hizbNo
+    const leaderEntry=Object.values(db.leaders).find(l=>l.hizbNo===no);
+    if (!leaderEntry){showToast("Hizb #"+no+" not found","err");return;}
     if (!memberName){showToast("Select your name","err");return;}
     if (!password||password.length<4){showToast("Password min 4 chars","err");return;}
     const key=no+"_"+memberName.toLowerCase().replace(/\s+/g,"_");
     if (db.memberAccounts[key]){showToast("Account already exists for this name","err");return;}
-    const nm={key,hizbNo:no,memberName,leaderHizbNo:no,leaderName:l.displayName};
-    // find member id
-    const m=l.members.find(m=>m.name.toLowerCase()===memberName.toLowerCase());
-    if (m) nm.memberId=m.id;
-    nm.password=password;
+    const m=leaderEntry.members.find(m=>m.name.toLowerCase()===memberName.toLowerCase());
+    const nm={key,hizbNo:no,memberName,leaderSlug:leaderEntry.slug,leaderName:leaderEntry.displayName,memberId:m?m.id:null,password};
     setDb(prev=>{const u={...prev,memberAccounts:{...prev.memberAccounts,[key]:nm}};saveDB(u);return u;});
     setSession({role:"member",key,hizbNo:no});
     showToast("Welcome, "+memberName+"!");
@@ -220,8 +251,8 @@ export default function App() {
 
   function memberLogin(hizbNo,memberName,password) {
     const no=parseInt(hizbNo);
-    const l=db.leaders[no];
-    if (!l){showToast("Hizb #"+no+" not found","err");return;}
+    const leaderEntry=Object.values(db.leaders).find(l=>l.hizbNo===no);
+    if (!leaderEntry){showToast("Hizb #"+no+" not found","err");return;}
     if (!memberName){showToast("Select your name","err");return;}
     const key=no+"_"+memberName.toLowerCase().replace(/\s+/g,"_");
     const acc=db.memberAccounts[key];
@@ -237,7 +268,7 @@ export default function App() {
 
   // ── LEADER OPS ──
   function leaderShareLocation(lat,lng){
-    patchLeader(session.hizbNo,l=>({...l,location:{lat,lng,updatedAt:Date.now()}}));
+    patchLeader(session.slug,l=>({...l,location:{lat,lng,updatedAt:Date.now()}}));
   }
   function addMember(name,id){
     const num=parseInt(id);
@@ -245,11 +276,11 @@ export default function App() {
     const ms=leader.members||[];
     if (ms.find(m=>m.id===num)){showToast("ID #"+num+" exists","err");return false;}
     if (ms.find(m=>m.name.toLowerCase()===name.toLowerCase())){showToast("Name exists","err");return false;}
-    patchLeader(session.hizbNo,l=>({...l,members:[...(l.members||[]),{id:num,name:name.trim()}].sort((a,b)=>a.id-b.id)}));
+    patchLeader(session.slug,l=>({...l,members:[...(l.members||[]),{id:num,name:name.trim()}].sort((a,b)=>a.id-b.id)}));
     showToast(name+" added!"); return true;
   }
   function deleteMember(id){
-    patchLeader(session.hizbNo,l=>({...l,members:l.members.filter(m=>m.id!==id)}));
+    patchLeader(session.slug,l=>({...l,members:l.members.filter(m=>m.id!==id)}));
     showToast("Member removed");
   }
   function importExcel(file){
@@ -268,7 +299,7 @@ export default function App() {
           existing.push({id,name}); added++;
         });
         existing.sort((a,b)=>a.id-b.id);
-        patchLeader(session.hizbNo,l=>({...l,members:existing}));
+        patchLeader(session.slug,l=>({...l,members:existing}));
         showToast("Imported "+added+(skipped?", "+skipped+" skipped":""));
       } catch(err){showToast("Invalid file","err");}
     };
@@ -277,15 +308,15 @@ export default function App() {
   function createEvent(name,date,loc){
     if (!name.trim()||!date){showToast("Fill name and date","err");return false;}
     const ev={id:Date.now(),name:name.trim(),date,eventLocation:loc||null,arrivedIds:[],memberAttendance:{},createdAt:Date.now()};
-    patchLeader(session.hizbNo,l=>({...l,events:[...(l.events||[]),ev]}));
+    patchLeader(session.slug,l=>({...l,events:[...(l.events||[]),ev]}));
     showToast("Event created!"); return true;
   }
   function deleteEvent(id){
-    patchLeader(session.hizbNo,l=>({...l,events:l.events.filter(e=>e.id!==id)}));
+    patchLeader(session.slug,l=>({...l,events:l.events.filter(e=>e.id!==id)}));
     showToast("Event deleted");
   }
   function leaderToggle(evId,memberId){
-    patchLeader(session.hizbNo,l=>({
+    patchLeader(session.slug,l=>({
       ...l,events:l.events.map(ev=>{
         if (ev.id!==evId) return ev;
         const arr=[...(ev.arrivedIds||[])];
@@ -299,8 +330,7 @@ export default function App() {
   // ── MEMBER OPS ──
   function memberMarkAttendance(evId){
     const acc=memberAcc;
-    const no=acc.leaderHizbNo;
-    patchLeader(no,l=>({
+    patchLeader(acc.leaderSlug,l=>({
       ...l,events:l.events.map(ev=>{
         if (ev.id!==evId) return ev;
         const key=acc.key;
@@ -417,7 +447,7 @@ function LeaderLogin({onLogin,onReg,onBack}) {
               value={pass} onChange={e=>setPass(e.target.value)} onKeyDown={e=>e.key==="Enter"&&onLogin(no,name,pass)}/>
             <button onClick={()=>setShow(v=>!v)} style={{position:"absolute",right:14,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",cursor:"pointer",fontSize:17,color:C.textLight}}>{show?"🙈":"👁"}</button>
           </div>
-          <button className="bg" style={{width:"100%",padding:"15px 0",fontSize:15}} onClick={()=>onLogin(no,name,pass)}>Sign In as Leader</button>
+          <button className="bg" style={{width:"100%",padding:"15px 0",fontSize:15}} onClick={()=>onLogin(name,pass,no)}>Sign In as Leader</button>
         </div>
         <p style={{textAlign:"center",fontSize:14,color:C.textLight}}>New leader? <span onClick={onReg} style={{color:C.gold,fontWeight:700,cursor:"pointer"}}>Register</span></p>
       </div>
@@ -434,7 +464,7 @@ function LeaderReg({onReg,onLogin,onBack}) {
     if (!no||!name.trim()||!pass){alert("Fill all fields");return;}
     if (pass.length<4){alert("Password min 4 characters");return;}
     if (pass!==conf){alert("Passwords do not match");return;}
-    onReg(no,name.trim(),pass);
+    onReg(name.trim(),pass,no);
   }
   return (
     <div className="pg" style={{maxWidth:400,margin:"0 auto",padding:"0 0 40px"}}>
@@ -471,7 +501,7 @@ function MemberLogin({db,onLogin,onReg,onBack}) {
   const [pass,setPass]=useState("");
   const [show,setShow]=useState(false);
 
-  const leader=no&&db.leaders[parseInt(no)];
+  const leader=no?Object.values(db.leaders).find(l=>l.hizbNo===parseInt(no)):null;
   const memberList=leader?(leader.members||[]):[];
 
   // reset name when hizb changes
@@ -533,7 +563,7 @@ function MemberReg({db,onReg,onLogin,onBack}) {
   const [conf,setConf]=useState("");
   const [show,setShow]=useState(false);
 
-  const leader=no&&db.leaders[parseInt(no)];
+  const leader=no?Object.values(db.leaders).find(l=>l.hizbNo===parseInt(no)):null;
   const memberList=leader?(leader.members||[]):[];
 
   useEffect(()=>setSelName(""),[no]);
@@ -687,6 +717,8 @@ function LeaderHome({leader,nav,logout,onShareLoc,showToast}) {
         </div>
       </div>
       <div style={{padding:"18px 18px 0",display:"flex",flexDirection:"column",gap:14}}>
+        {/* GPS Notice */}
+        <GpsNotice role="leader"/>
         {/* Location share */}
         <div className="card" style={{padding:18}}>
           <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:12}}>
@@ -919,7 +951,7 @@ function MemberHome({acc,db,logout,showToast,onMark}) {
   const [locMsg,setLocMsg]=useState("");
   const [dist,setDist]=useState(null);
   const [marking,setMarking]=useState(null);
-  const leader=db.leaders[acc.leaderHizbNo];
+  const leader=db.leaders[acc.leaderSlug];
   const events=leader?(leader.events||[]):[];
 
   function openLeaderMap(){
@@ -1009,6 +1041,8 @@ function MemberHome({acc,db,logout,showToast,onMark}) {
       </div>
 
       <div style={{padding:"18px 18px 0",display:"flex",flexDirection:"column",gap:14}}>
+        {/* GPS Notice */}
+        <GpsNotice role="member"/>
         {/* Find Leader */}
         <div className="card" style={{padding:18}}>
           <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:12}}>
@@ -1159,6 +1193,93 @@ function AddMemPage({leader,nav,onAdd}) {
         </div>
       </div>
       <Footer/>
+    </div>
+  );
+}
+
+
+// ─── GPS NOTICE COMPONENT ─────────────────────────────────────────────────────
+function GpsNotice({role="leader"}) {
+  const [dismissed, setDismissed] = useState(false);
+  const [gpsState, setGpsState] = useState("unknown"); // unknown | granted | denied | prompt
+
+  useEffect(()=>{
+    // Check permission state if API available
+    if (navigator.permissions) {
+      navigator.permissions.query({name:"geolocation"}).then(result=>{
+        setGpsState(result.state);
+        result.onchange = () => setGpsState(result.state);
+      }).catch(()=>{});
+    }
+  },[]);
+
+  if (dismissed || gpsState === "granted") return null;
+
+  const isLeader = role === "leader";
+
+  return (
+    <div className="gps-banner" style={{
+      margin:"0 18px 14px",
+      background: isLeader
+        ? "linear-gradient(135deg,#1a4a35,#2D6A4F)"
+        : "linear-gradient(135deg,#7B5900,#B8860B)",
+      borderRadius:18,
+      padding:"16px 16px 14px",
+      boxShadow:"0 4px 20px rgba(0,0,0,0.18)",
+      border:`1px solid ${isLeader?"rgba(82,183,136,0.3)":"rgba(212,175,55,0.3)"}`,
+    }}>
+      {/* Header */}
+      <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",marginBottom:12}}>
+        <div style={{display:"flex",alignItems:"center",gap:10}}>
+          <div style={{fontSize:26}}>📡</div>
+          <div>
+            <p style={{margin:0,fontSize:14,fontWeight:700,color:"#fff"}}>
+              {gpsState==="denied" ? "⚠️ GPS Access Blocked!" : "Enable Location Services"}
+            </p>
+            <p style={{margin:"2px 0 0",fontSize:11,color:"rgba(255,255,255,0.7)"}}>
+              Required for {isLeader ? "sharing your location with members" : "verifying you are near your leader"}
+            </p>
+          </div>
+        </div>
+        <button onClick={()=>setDismissed(true)} style={{background:"rgba(255,255,255,0.15)",border:"none",borderRadius:8,padding:"4px 8px",color:"rgba(255,255,255,0.7)",cursor:"pointer",fontSize:13,flexShrink:0}}>✕</button>
+      </div>
+
+      {/* Steps */}
+      <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:14}}>
+        {[
+          {icon:"📍", text:"GPS / Location — Must be ON", sub:"Settings → Location → Turn ON"},
+          {icon:"🌐", text:"Browser Location Permission", sub:'When prompted tap "Allow" — never "Block"'},
+          {icon:"📶", text:"Stay outdoors or near a window", sub:"GPS works best with clear sky view"},
+        ].map((s,i)=>(
+          <div key={i} style={{display:"flex",alignItems:"flex-start",gap:10,background:"rgba(255,255,255,0.1)",borderRadius:12,padding:"10px 12px"}}>
+            <span style={{fontSize:18,flexShrink:0}}>{s.icon}</span>
+            <div>
+              <p style={{margin:0,fontSize:13,fontWeight:600,color:"#fff"}}>{s.text}</p>
+              <p style={{margin:"2px 0 0",fontSize:11,color:"rgba(255,255,255,0.65)"}}>{s.sub}</p>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {gpsState==="denied" && (
+        <div style={{background:"rgba(192,57,43,0.3)",border:"1px solid rgba(192,57,43,0.5)",borderRadius:10,padding:"10px 12px",marginBottom:12}}>
+          <p style={{margin:0,fontSize:12,color:"#ffb3b3",fontWeight:600}}>🔒 Location is blocked in your browser.</p>
+          <p style={{margin:"4px 0 0",fontSize:11,color:"rgba(255,255,255,0.7)"}}>
+            Go to your browser Settings → Site Settings → Location → Allow this site
+          </p>
+        </div>
+      )}
+
+      {/* Platform-specific instructions */}
+      <div style={{background:"rgba(255,255,255,0.1)",borderRadius:12,padding:"10px 14px"}}>
+        <p style={{margin:"0 0 6px",fontSize:12,fontWeight:700,color:"rgba(255,255,255,0.9)"}}>📱 How to enable on your phone:</p>
+        <p style={{margin:"0 0 4px",fontSize:11,color:"rgba(255,255,255,0.75)"}}>
+          <strong style={{color:"#fff"}}>iPhone:</strong> Settings → Privacy → Location Services → Safari → "While Using"
+        </p>
+        <p style={{margin:0,fontSize:11,color:"rgba(255,255,255,0.75)"}}>
+          <strong style={{color:"#fff"}}>Android:</strong> Settings → Apps → Browser → Permissions → Location → Allow
+        </p>
+      </div>
     </div>
   );
 }
